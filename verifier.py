@@ -6,7 +6,7 @@ import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Optional, Union
 from urllib.parse import urljoin
 
 import pandas as pd
@@ -121,9 +121,9 @@ def looks_like_street(value: Any) -> bool:
     )
 
 
-def detect_columns(columns: Iterable[str]) -> dict[str, str | None]:
+def detect_columns(columns: Iterable[str]) -> dict[str, Optional[str]]:
     normalized = {normalize(col): col for col in columns}
-    mapping: dict[str, str | None] = {}
+    mapping: dict[str, Optional[str]] = {}
     for canonical, aliases in COLUMN_ALIASES.items():
         mapping[canonical] = None
         for alias in aliases:
@@ -134,19 +134,19 @@ def detect_columns(columns: Iterable[str]) -> dict[str, str | None]:
     return mapping
 
 
-def validate_mapping(mapping: dict[str, str | None]) -> None:
+def validate_mapping(mapping: dict[str, Optional[str]]) -> None:
     if not mapping.get("company"):
         raise ValueError("CSV cần có cột tên tiệm, ví dụ Company / Business / Name.")
     if not any(mapping.get(key) for key in ("street", "city", "zip", "phone")):
         raise ValueError("CSV cần ít nhất một cột địa chỉ/ZIP/Phone.")
 
 
-def row_value(row: pd.Series, mapping: dict[str, str | None], key: str) -> str:
+def row_value(row: pd.Series, mapping: dict[str, Optional[str]], key: str) -> str:
     column = mapping.get(key)
     return clean(row.get(column, "")) if column else ""
 
 
-def extract_input(row: pd.Series, mapping: dict[str, str | None]) -> dict[str, str]:
+def extract_input(row: pd.Series, mapping: dict[str, Optional[str]]) -> dict[str, str]:
     data = {key: row_value(row, mapping, key) for key in COLUMN_ALIASES}
     if not data["street"] and looks_like_street(data["city"]):
         data["street"] = data["city"]
@@ -190,7 +190,7 @@ def _tag_haystack(tag: Any) -> str:
     return normalize(" ".join(attrs + [label_text, parent_text]))
 
 
-def _find_control(form: Any, keywords: list[str], tags: tuple[str, ...] = ("input", "select")) -> Any | None:
+def _find_control(form: Any, keywords: list[str], tags: tuple[str, ...] = ("input", "select")) -> Optional[Any]:
     candidates = form.find_all(list(tags))
     scored: list[tuple[int, Any]] = []
     for tag in candidates:
@@ -365,7 +365,7 @@ class SouthDakotaLicenseClient:
         self.session.headers.update({"User-Agent": USER_AGENT})
         self.timeout = timeout
         self.delay_seconds = delay_seconds
-        self._html: str | None = None
+        self._html: Optional[str] = None
         self._cache: dict[str, list[dict[str, str]]] = {}
 
     def _get_page(self) -> str:
@@ -451,7 +451,7 @@ class SouthDakotaLicenseClient:
 class NominatimClient:
     def __init__(
         self,
-        cache_file: str | Path = ".cache/nominatim.json",
+        cache_file: Union[str, Path] = ".cache/nominatim.json",
         timeout: int = 20,
         min_interval: float = 1.05,
     ):
@@ -549,7 +549,7 @@ def score_osm_candidate(
 
 def best_osm_match(
     data: dict[str, str], items: list[dict[str, Any]]
-) -> tuple[dict[str, Any] | None, float]:
+) -> tuple[Optional[dict[str, Any]], float]:
     scored = [
         (score_osm_candidate(data, item)[0], item) for item in items
     ]
@@ -557,7 +557,7 @@ def best_osm_match(
     return (scored[0][1], scored[0][0]) if scored else (None, 0.0)
 
 
-def osm_type(item: dict[str, Any] | None) -> str:
+def osm_type(item: Optional[dict[str, Any]]) -> str:
     if not item:
         return ""
     category = clean(item.get("category"))
@@ -569,7 +569,7 @@ def osm_type(item: dict[str, Any] | None) -> str:
 
 
 def osm_is_nail_or_beauty(
-    item: dict[str, Any] | None, company: str
+    item: Optional[dict[str, Any]], company: str
 ) -> bool:
     if not item:
         return False
@@ -582,7 +582,7 @@ def osm_is_nail_or_beauty(
     )
 
 
-def osm_is_wrong_business(item: dict[str, Any] | None) -> bool:
+def osm_is_wrong_business(item: Optional[dict[str, Any]]) -> bool:
     if not item:
         return False
     return normalize(item.get("type")) in OSM_WRONG_TYPES
@@ -590,7 +590,7 @@ def osm_is_wrong_business(item: dict[str, Any] | None) -> bool:
 
 def best_license_match(
     data: dict[str, str], candidates: list[dict[str, str]]
-) -> LicenseMatch | None:
+) -> Optional[LicenseMatch]:
     matches = []
     for candidate in candidates:
         score, name_score, zip_match = score_license_candidate(
@@ -605,9 +605,9 @@ def best_license_match(
 
 def verify_row(
     row: pd.Series,
-    mapping: dict[str, str | None],
+    mapping: dict[str, Optional[str]],
     license_client: Any,
-    osm_client: Any | None = None,
+    osm_client: Optional[Any] = None,
 ) -> dict[str, Any]:
     data = extract_input(row, mapping)
     company = data.get("company", "")
@@ -785,11 +785,11 @@ def verify_row(
 
 def verify_dataframe(
     df: pd.DataFrame,
-    limit: int | None = None,
-    progress: Callable[[int, int, str], None] | None = None,
+    limit: Optional[int] = None,
+    progress: Optional[Callable[[int, int, str], None]] = None,
     use_osm: bool = True,
-    license_client: Any | None = None,
-    osm_client: Any | None = None,
+    license_client: Optional[Any] = None,
+    osm_client: Optional[Any] = None,
 ) -> pd.DataFrame:
     mapping = detect_columns(df.columns)
     validate_mapping(mapping)
