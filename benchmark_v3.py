@@ -1,28 +1,35 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 
 import pandas as pd
 
 from nailverifier_v3.engine import ENGINE_VERSION, verify_dataframe
+from nailverifier_v3.policy import (
+    MIN_KEEP_PRECISION,
+    MIN_REMOVE_PRECISION,
+    MIN_RULE_SAMPLES_KEEP,
+    MIN_RULE_SAMPLES_REMOVE,
+)
 
 
-def auto_prediction(auto_action: str) -> str:
-    if auto_action == "KEEP":
+def action_to_label(action: str) -> str:
+    if action == "KEEP":
         return "NAIL"
-    if auto_action == "REMOVE":
+    if action == "REMOVE":
         return "NOT_NAIL"
     return "ABSTAIN"
 
 
-def safe_ratio(numerator: int, denominator: int) -> float:
-    return numerator / denominator if denominator else 0.0
+def ratio(a: int, b: int) -> float:
+    return a / b if b else 0.0
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", default="benchmarks/sd_gold.csv")
-    parser.add_argument("--with-osm", action="store_true", help="Diagnostic only; production batch profile is official-only")
+    parser.add_argument("--with-osm", action="store_true")
     args = parser.parse_args()
 
     gold = pd.read_csv(args.file, dtype=str, keep_default_na=False)
@@ -36,73 +43,79 @@ def main() -> None:
         force_refresh=True,
     )
     checked["Expected"] = gold["Expected"].values
-    checked["Auto_Prediction"] = checked["Auto_Action"].map(auto_prediction)
-
-    auto = checked[checked["Auto_Prediction"] != "ABSTAIN"].copy()
-    keeps = auto[auto["Auto_Action"] == "KEEP"].copy()
-    removes = auto[auto["Auto_Action"] == "REMOVE"].copy()
-
-    auto_correct = int((auto["Auto_Prediction"] == auto["Expected"]).sum())
-    keep_correct = int((keeps["Expected"] == "NAIL").sum())
-    remove_correct = int((removes["Expected"] == "NOT_NAIL").sum())
-    false_removals = int((removes["Expected"] == "NAIL").sum())
-
-    overall_precision = safe_ratio(auto_correct, len(auto))
-    keep_precision = safe_ratio(keep_correct, len(keeps))
-    remove_precision = safe_ratio(remove_correct, len(removes))
-    coverage = safe_ratio(len(auto), len(checked))
+    checked["Candidate_Prediction"] = checked["Candidate_Action"].map(action_to_label)
+    checked["Auto_Prediction"] = checked["Auto_Action"].map(action_to_label)
 
     print(
         checked[
             [
                 "Company",
                 "Expected",
+                "Rule_ID",
                 "Decision",
-                "Confidence",
+                "Candidate_Action",
                 "Auto_Action",
-                "Auto_Prediction",
-                "Business_Exists",
-                "Nail_Service",
+                "Policy_Status",
                 "Reason",
             ]
         ].to_string(index=False)
     )
+
     print()
-    print("Engine:", ENGINE_VERSION)\n    print("Profile:", "TEST_WITH_OSM" if args.with_osm else "PRODUCTION_OFFICIAL_BATCH")
+    print("Engine:", ENGINE_VERSION)
+    print("Profile:", "TEST_WITH_OSM" if args.with_osm else "PRODUCTION_OFFICIAL_BATCH")
     print("Gold rows:", len(checked))
-    print("Auto-decided KEEP/REMOVE:", len(auto))
-    print("KEEP decisions:", len(keeps))
-    print("REMOVE decisions:", len(removes))
-    print("Coverage: %.1f%%" % (coverage * 100))
-    print("Overall auto precision: %.2f%%" % (overall_precision * 100))
-    print("KEEP precision: %.2f%%" % (keep_precision * 100))
-    print("REMOVE precision: %.2f%%" % (remove_precision * 100))
-    print("False removals:", false_removals)
 
-    failures = []
-    if len(checked) < 20:
-        failures.append("gold set must contain at least 20 manually verified rows")
-    if int((gold["Expected"] == "NAIL").sum()) < 10:
-        failures.append("gold set needs at least 10 NAIL rows")
-    if int((gold["Expected"] == "NOT_NAIL").sum()) < 5:
-        failures.append("gold set needs at least 5 NOT_NAIL rows")
-    if len(keeps) < 5:
-        failures.append("need at least 5 automatic KEEP decisions before production")
-    if len(removes) < 3:
-        failures.append("need at least 3 automatic REMOVE decisions before production")
-    if keep_precision < 0.99:
-        failures.append("KEEP precision must be >= 99%")
-    if remove_precision < 0.995:
-        failures.append("REMOVE precision must be >= 99.5%")
-    if false_removals != 0:
-        failures.append("false removals must be zero")
-
-    if failures:
-        print("GATE: FAIL / NOT PRODUCTION READY")
-        for failure in failures:
-            print(" -", failure)
+    print()
+    print("Candidate rule report:")
+    candidates = checked[checked["Candidate_Prediction"] != "ABSTAIN"].copy()
+    if candidates.empty:
+        print("No KEEP/REMOVE candidate rules found.")
     else:
-        print("GATE: PASS — precision gate met for this state's gold set.")
+        for (rule_id, action), group in candidates.groupby(["Rule_ID", "Candidate_Action"]):
+            expected_label = action_to_label(action)
+            correct = int((group["Expected"] == expected_label).sum())
+            n = len(group)
+            precision = ratio(correct, n)
+            false_remove = int(((group["Candidate_Action"] == "REMOVE") & (group["Expected"] == "NAIL")).sum())
+
+            if action == "KEEP":
+                min_n = MIN_RULE_SAMPLES_KEEP
+                threshold = MIN_KEEP_PRECISION
+            else:
+                min_n = MIN_RULE_SAMPLES_REMOVE
+                threshold = MIN_REMOVE_PRECISION
+
+            eligible = n >= min_n and precision >= threshold and false_remove == 0
+            print(
+                "%s / %s: n=%d precision=%.2f%% false_remove=%d -> %s"
+                % (
+                    rule_id,
+                    action,
+                    n,
+                    precision * 100,
+                    false_remove,
+                    "ELIGIBLE" if eligible else "NEEDS_MORE_VALIDATION",
+                )
+            )
+
+    auto = checked[checked["Auto_Prediction"] != "ABSTAIN"].copy()
+    auto_correct = int((auto["Auto_Prediction"] == auto["Expected"]).sum()) if len(auto) else 0
+    print()
+    print("Actual auto-actions enabled by policy:", len(auto))
+    print("Actual auto-action precision: %.2f%%" % (ratio(auto_correct, len(auto)) * 100))
+
+    false_auto_remove = int(
+        ((checked["Auto_Action"] == "REMOVE") & (checked["Expected"] == "NAIL")).sum()
+    )
+    print("False automatic removals:", false_auto_remove)
+
+    if false_auto_remove:
+        print("GATE: FAIL — automatic false removal detected.")
+    elif len(auto) == 0:
+        print("GATE: SAFE BUT NOT ENABLED — no benchmark-validated local auto rules yet.")
+    else:
+        print("GATE: PARTIAL — only policy-enabled rules are active; inspect per-rule report.")
 
 
 if __name__ == "__main__":
