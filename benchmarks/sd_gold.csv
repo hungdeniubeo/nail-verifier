@@ -1,0 +1,11 @@
+State,Company,Street,City,ZIP,Phone,Rating,Reviews,Status,Expected,Gold_Source_URL,Gold_Notes
+SD,Hang Nails Salon,—,500 E Figzel Ct,57064,(605) 408-3617,4.9,64,OPERATIONAL,NAIL,https://www.bbb.org/us/sd/tea/profile/nail-salon/hang-nails-salon-0714-300167696,BBB classifies as Nail Salon
+SD,Luxury Nails Spa,3828 6th Ave SE C,Aberdeen,57401,(605) 229-3020,4.1,161,OPERATIONAL,NAIL,https://www.waze.com/live-map/directions/us/sd/aberdeen/luxury-nails-spa?to=place.ChIJc6BNBg1D0lIRe9D1_VlsJP0,Independent listing matches name address phone
+SD,Nails Club,3315 6th Ave SE #54,Aberdeen,57401,(605) 229-7946,4.3,71,OPERATIONAL,NAIL,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed under Nail Salons in Aberdeen
+SD,Professional Hair Design,708 S Roosevelt St #3,Aberdeen,57401,(605) 225-1230,4.9,24,OPERATIONAL,NAIL,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed under Nail Salons in Aberdeen
+SD,Pro Nails,3015 6th Ave SE #10,Aberdeen,57401,(605) 262-4747,4.3,151,OPERATIONAL,NAIL,https://pronailsaberdeen.weebly.com/,Official business website states full service nail salon
+SD,Revive Salon & Day Spa,301 S Main St,Aberdeen,57401,(605) 725-4242,4.6,188,OPERATIONAL,NAIL,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed under Nail Salons in Aberdeen
+SD,Tip And Toe Nails,3307 7th Ave SE Unit 112,Aberdeen,57401,(605) 262-4343,4.4,138,OPERATIONAL,NAIL,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed under Nail Salons in Aberdeen
+SD,Digits Nail Spa PLLC,520 5th Ave,Belle Fourche,57717,(605) 801-0966,5.0,4,OPERATIONAL,NAIL,https://www.bellefourchechamber.org/business-category/barber-shops-salons-personal-care/,Chamber/business reporting identifies nail spa
+SD,Alexandria Ace Hardware,701 Spruce St,Alexandria,57311,(605) 239-4444,5.0,20,OPERATIONAL,NOT_NAIL,https://www.acehardware.com/,Hardware store
+SD,1481 Roadhouse Grille,408 S US-81,Arlington,57212,(605) 983-4630,4.5,390,OPERATIONAL,NOT_NAIL,https://1481grille.com/,Restaurant
