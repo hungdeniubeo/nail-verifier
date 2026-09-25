@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 
 SD_LICENSE_URL = "https://apps.sd.gov/ld19cosmetology/licenseverification.aspx"
+SD_BUSINESS_ROSTER_URL = "https://apps.sd.gov/LD19Cosmetology/LicenseListing.aspx?s=SD&t=b"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 USER_AGENT = "NailVerifier/2.0 (https://github.com/hungdeniubeo/nail-verifier)"
 
@@ -354,98 +355,84 @@ class LicenseMatch:
 
 
 class SouthDakotaLicenseClient:
-    """Search the official South Dakota Cosmetology current-license roster.
+    """Read the public current-business roster from South Dakota.
 
-    The state site uses an ASP.NET form. Field names are discovered at runtime
-    instead of hard-coding ctl00/... IDs. Results are cached by ZIP.
+    Important: do NOT submit the ASP.NET search form. The form flow can redirect
+    automated clients into a protected renewals/error page and return 401.
+    Instead, fetch the public Business License Search Results list directly once,
+    cache it in memory, then filter locally by ZIP/company for every CSV row.
     """
 
-    def __init__(self, timeout: int = 25, delay_seconds: float = 0.35):
+    def __init__(self, timeout: int = 30):
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": USER_AGENT})
+        self.session.headers.update(
+            {
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+        )
         self.timeout = timeout
-        self.delay_seconds = delay_seconds
-        self._html: Optional[str] = None
-        self._cache: dict[str, list[dict[str, str]]] = {}
+        self._roster: Optional[list[dict[str, str]]] = None
+        self._zip_cache: dict[str, list[dict[str, str]]] = {}
 
-    def _get_page(self) -> str:
-        response = self.session.get(SD_LICENSE_URL, timeout=self.timeout)
+    def _load_roster(self) -> list[dict[str, str]]:
+        if self._roster is not None:
+            return self._roster
+
+        response = self.session.get(
+            SD_BUSINESS_ROSTER_URL,
+            timeout=self.timeout,
+            allow_redirects=True,
+        )
         response.raise_for_status()
-        self._html = response.text
-        return self._html
 
-    def _submit(self, *, zip_code: str = "", company: str = "") -> str:
-        html = self._html or self._get_page()
-        soup = BeautifulSoup(html, "html.parser")
-        form = soup.find("form")
-        if not form:
+        rows = parse_license_rows(response.text)
+        if not rows:
             raise RuntimeError(
-                "Không tìm thấy form License Verification của South Dakota."
+                "Không đọc được roster Business License công khai của South Dakota. "
+                f"URL cuối: {response.url}"
             )
 
-        payload = _initial_form_payload(form)
-        _set_business_radio(form, payload)
-
-        company_control = _find_control(form, ["company"])
-        zip_control = _find_control(form, ["zip", "postal"])
-        state_control = _find_control(
-            form, ["state", "province"], tags=("select",)
-        )
-
-        if company_control is not None and company_control.get("name"):
-            payload[company_control["name"]] = company
-        if zip_control is not None and zip_control.get("name"):
-            payload[zip_control["name"]] = zip_code
-        if state_control is not None:
-            _set_select_by_text(
-                state_control, payload, ["SD", "South Dakota"]
-            )
-
-        for keywords in (["first name"], ["last name"], ["license"]):
-            control = _find_control(form, keywords)
-            if (
-                control is not None
-                and control.get("name")
-                and control is not company_control
-            ):
-                payload[control["name"]] = ""
-
-        submit = None
-        for tag in form.find_all(["input", "button"]):
-            typ = (tag.get("type") or "").lower()
-            value = clean(tag.get("value") or tag.get_text(" ", strip=True))
-            if typ in {"submit", "button", ""} and "search" in normalize(value):
-                submit = tag
-                break
-        if submit is not None and submit.get("name"):
-            payload[submit["name"]] = submit.get("value", "Search")
-
-        action = urljoin(
-            SD_LICENSE_URL, form.get("action") or SD_LICENSE_URL
-        )
-        response = self.session.post(
-            action, data=payload, timeout=self.timeout
-        )
-        response.raise_for_status()
-        self._html = response.text
-        if self.delay_seconds:
-            time.sleep(self.delay_seconds)
-        return response.text
+        self._roster = rows
+        return rows
 
     def search_zip(self, zip_code: str) -> list[dict[str, str]]:
         zip_code = normalize_zip(zip_code)
         if not zip_code:
             return []
-        if zip_code in self._cache:
-            return self._cache[zip_code]
-        html = self._submit(zip_code=zip_code)
-        rows = parse_license_rows(html)
-        self._cache[zip_code] = rows
-        return rows
+
+        if zip_code in self._zip_cache:
+            return self._zip_cache[zip_code]
+
+        rows = self._load_roster()
+        matches: list[dict[str, str]] = []
+        for row in rows:
+            raw = row.get("_raw", "")
+            candidate_zip = normalize_zip(
+                _field(row, ("zip", "postal")) or raw
+            )
+            if candidate_zip == zip_code:
+                matches.append(row)
+
+        self._zip_cache[zip_code] = matches
+        return matches
 
     def search_company(self, company: str) -> list[dict[str, str]]:
-        html = self._submit(company=clean(company))
-        return parse_license_rows(html)
+        target = normalize(company)
+        if not target:
+            return []
+
+        rows = self._load_roster()
+        scored: list[tuple[float, dict[str, str]]] = []
+        for row in rows:
+            candidate = _field(row, ("company", "business", "name")) or row.get("_raw", "")
+            score = fuzz.token_set_ratio(target, normalize(candidate)) / 100.0
+            if score >= 0.55:
+                scored.append((score, row))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [row for _, row in scored[:25]]
 
 
 class NominatimClient:
