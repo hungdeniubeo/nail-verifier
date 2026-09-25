@@ -1,11 +1,21 @@
-State,Company,Street,City,ZIP,Phone,Rating,Reviews,Status,Expected,Gold_Source_URL,Gold_Notes
-SD,Hang Nails Salon,—,500 E Figzel Ct,57064,(605) 408-3617,4.9,64,OPERATIONAL,NAIL,https://www.bbb.org/us/sd/tea/profile/nail-salon/hang-nails-salon-0714-300167696,BBB classifies as Nail Salon
-SD,Luxury Nails Spa,3828 6th Ave SE C,Aberdeen,57401,(605) 229-3020,4.1,161,OPERATIONAL,NAIL,https://www.waze.com/live-map/directions/us/sd/aberdeen/luxury-nails-spa?to=place.ChIJc6BNBg1D0lIRe9D1_VlsJP0,Independent listing matches name address phone
-SD,Nails Club,3315 6th Ave SE #54,Aberdeen,57401,(605) 229-7946,4.3,71,OPERATIONAL,NAIL,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed under Nail Salons in Aberdeen
-SD,Professional Hair Design,708 S Roosevelt St #3,Aberdeen,57401,(605) 225-1230,4.9,24,OPERATIONAL,NAIL,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed under Nail Salons in Aberdeen
-SD,Pro Nails,3015 6th Ave SE #10,Aberdeen,57401,(605) 262-4747,4.3,151,OPERATIONAL,NAIL,https://pronailsaberdeen.weebly.com/,Official business website states full service nail salon
-SD,Revive Salon & Day Spa,301 S Main St,Aberdeen,57401,(605) 725-4242,4.6,188,OPERATIONAL,NAIL,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed under Nail Salons in Aberdeen
-SD,Tip And Toe Nails,3307 7th Ave SE Unit 112,Aberdeen,57401,(605) 262-4343,4.4,138,OPERATIONAL,NAIL,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed under Nail Salons in Aberdeen
-SD,Digits Nail Spa PLLC,520 5th Ave,Belle Fourche,57717,(605) 801-0966,5.0,4,OPERATIONAL,NAIL,https://www.bellefourchechamber.org/business-category/barber-shops-salons-personal-care/,Chamber/business reporting identifies nail spa
-SD,Alexandria Ace Hardware,701 Spruce St,Alexandria,57311,(605) 239-4444,5.0,20,OPERATIONAL,NOT_NAIL,https://www.acehardware.com/,Hardware store
-SD,1481 Roadhouse Grille,408 S US-81,Arlington,57212,(605) 983-4630,4.5,390,OPERATIONAL,NOT_NAIL,https://1481grille.com/,Restaurant
+State,Company,Street,City,ZIP,Phone,Rating,Reviews,Status,Expected,Gold_Strength,Gold_Source_URL,Gold_Notes
+SD,Hang Nails Salon,—,500 E Figzel Ct,57064,(605) 408-3617,4.9,64,OPERATIONAL,NAIL,HIGH,https://www.bbb.org/us/sd/tea/profile/nail-salon/hang-nails-salon-0714-300167696,BBB classifies as Nail Salon at matching address
+SD,APPOISE Spa,10 Railroad Ave SW,Aberdeen,57401,(651) 336-9684,5.0,33,OPERATIONAL,NOT_NAIL,HIGH,https://www.appoise.com/,Official current service list focuses skincare massage waxing lashes wellness and does not offer nail services
+SD,Audra Day Spa & Salon,18 2nd Ave SE,Aberdeen,57401,(605) 626-6169,4.6,20,OPERATIONAL,NAIL,HIGH,https://audradayspa.wixsite.com/audradayspa,Official website has a NAILS service section and matching address phone
+SD,Beauty Bar,502 E Melgaard Rd,Aberdeen,57401,(605) 262-2227,5.0,13,OPERATIONAL,NAIL,HIGH,https://www.yellowpages.com/aberdeen-sd/nail-salons,Same phone is listed as Nail Salons and city records document Beauty Bar relocation to 502 E Melgaard Rd
+SD,Blank Canvas Salon,601 Riverside Dr Ste 2,Aberdeen,57401,(605) 725-2244,5.0,1,OPERATIONAL,NAIL,MEDIUM,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed in Aberdeen nail salons at matching address
+SD,H.I.P. Salon and Spa,420 N Main St,Aberdeen,57401,(605) 725-4447,4.8,108,OPERATIONAL,NAIL,HIGH,https://salondiscover.com/h-i-p-salon-and-spa-57401/,Service list includes manicure and pedicure at matching address phone
+SD,Luxury Nails Spa,3828 6th Ave SE C,Aberdeen,57401,(605) 229-3020,4.1,161,OPERATIONAL,NAIL,HIGH,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Listed as nail salon at matching address
+SD,Nails Club,3315 6th Ave SE #54,Aberdeen,57401,(605) 229-7946,4.3,71,OPERATIONAL,NAIL,HIGH,https://www.yellowpages.com/aberdeen-sd/nail-salons,Listed as Nail Salons Beauty Salons with matching phone
+SD,Professional Hair Design,708 S Roosevelt St #3,Aberdeen,57401,(605) 225-1230,4.9,24,OPERATIONAL,NAIL,HIGH,https://www.yellowpages.com/redfield-sd/nail-salons,Listed as Nail Salons Beauty Salons with matching address phone
+SD,Pro Nails,3015 6th Ave SE #10,Aberdeen,57401,(605) 262-4747,4.3,151,OPERATIONAL,NAIL,HIGH,https://pronailsaberdeen.weebly.com/,Official business website identifies full service nail salon
+SD,Revive Salon & Day Spa,301 S Main St,Aberdeen,57401,(605) 725-4242,4.6,188,OPERATIONAL,NAIL,HIGH,https://www.bestprosintown.com/sd/aberdeen/nail-salons/,Independent nail-salon listing matches address and phone
+SD,Tip And Toe Nails,3307 7th Ave SE Unit 112,Aberdeen,57401,(605) 262-4343,4.4,138,OPERATIONAL,NAIL,HIGH,https://www.yellowpages.com/aberdeen-sd/nail-salons,Listed as nail salon with matching phone and address
+SD,Mindie's Salon and Spa,207 E 2nd St,Alcester,57001,(605) 359-7005,4.7,13,OPERATIONAL,NAIL,HIGH,https://www.loc8nearme.com/south-dakota/alcester/mindies-salon-and-spa/3260857/,Current reviews describe professional hair nails and waxing services
+SD,Alexandria Ace Hardware,701 Spruce St,Alexandria,57311,(605) 239-4444,5.0,20,OPERATIONAL,NOT_NAIL,HIGH,https://www.acehardware.com/,Hardware store
+SD,1481 Roadhouse Grille,408 S US-81,Arlington,57212,(605) 983-4630,4.5,390,OPERATIONAL,NOT_NAIL,HIGH,https://1481grille.com/,Restaurant
+SD,Deb & Nyla's Hair Styling,225 N Main St,Avon,57315,(605) 286-3928,4.8,19,OPERATIONAL,NOT_NAIL,HIGH,https://www.cityofavon.org/business-listing,Official city listing identifies Hair Styling and current address phone
+SD,Hair By Care,236 St Olaf Ave,Baltic,57003,(605) 529-5402,5.0,3,OPERATIONAL,NAIL,MEDIUM,https://us-business.info/directory/baltic-sd/,Business directory lists manicures nails pedicure at matching address phone
+SD,Digits Nail Spa PLLC,520 5th Ave,Belle Fourche,57717,(605) 801-0966,5.0,4,OPERATIONAL,NAIL,HIGH,https://salonuplift.glossgenius.com/about,Official Salon Uplift page confirms Digits Nail Spa is located inside at 520 5th Ave
+SD,Hair Gallery,518 State St,Belle Fourche,57717,(605) 892-3588,4.8,32,OPERATIONAL,NAIL,HIGH,https://reviews.birdeye.com/hair-gallery-168128879457889,Matching business has current pedicure review
+SD,Salon Uplift,520 5th Ave,Belle Fourche,57717,(605) 204-0829,4.7,13,OPERATIONAL,NOT_NAIL,HIGH,https://salonuplift.glossgenius.com/about,Official service list is hair extensions cuts colors perms waxing and separately directs nail clients to Digits Nail Spa
