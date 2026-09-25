@@ -1,116 +1,114 @@
 # Nail Verifier
 
-Tool này được làm theo **2 phase**:
+Tool có đúng **2 phase**:
 
 1. **Phase 1 — Export CSV từ NailMap**
-2. **Phase 2 — Kiểm tra các salon trong CSV có thật hay không**
-
-Hiện tại repo đang ở **Phase 1**.
-
-## Phase 1 — Export CSV từ NailMap
-
-File chính:
-
-`export_visible_table.js`
-
-### Mục tiêu
-
-Lấy dữ liệu từ report NailMap ra CSV **đúng và đủ dòng**, đặc biệt với bảng dùng virtual/infinite scroll.
-
-### Cách chạy
-
-1. Đăng nhập NailMap bằng Chrome.
-2. Mở report, ví dụ South Dakota:
-
-   `https://nailmap.lexorit.com/v2026/reports/by-state/sheet/?state=SD`
-
-3. Chờ bảng tải xong.
-4. Mở Chrome DevTools:
-   - macOS: `Command + Option + J`
-   - Windows: `Ctrl + Shift + J`
-5. Mở file `export_visible_table.js` trong repo.
-6. Copy toàn bộ nội dung file.
-7. Paste vào tab **Console** rồi nhấn Enter.
-8. Không đóng tab và không thao tác vào bảng trong lúc script đang chạy.
-
-### Phase 1 đã được nâng cấp
-
-- Tự đưa bảng về đầu rồi cuộn hết virtual/infinite-scroll.
-- Thu thập row trong nhiều lượt thay vì chỉ lấy row đang nhìn thấy.
-- Ưu tiên `row id`, `aria-rowindex`, `data-*` và record URL để chống duplicate.
-- Chỉ fallback sang nội dung row khi trang không có ID ổn định.
-- Cố đọc các counter dạng:
-  - `X of Y loaded`
-  - `Showing X-Y of Z`
-  - `N results`
-  - `Total: N`
-- Nếu NailMap báo tổng số dòng nhưng tool lấy thiếu thì **không tự tải CSV thiếu**.
-- Lưu kết quả debug tại:
-
-  `window.__NAILMAP_EXPORT_RESULT__`
-
-- Tự thêm cột `State` từ query `?state=SD` nếu bảng không có sẵn.
-
-### Kết quả thành công
-
-Ví dụ:
-
-```text
-State: SD
-Expected rows: 412
-Exported rows: 412
-Count match: YES
-```
-
-Browser sẽ tải file:
-
-```text
-nail-map-SD-YYYY-MM-DD.csv
-```
-
-### Nếu bị báo thiếu dòng
-
-Ví dụ:
-
-```text
-NailMap expected: 412
-Tool collected: 409
-```
-
-Tool sẽ **không tải CSV**.
-
-Hãy:
-
-1. chờ bảng NailMap load xong;
-2. chạy lại script;
-3. nếu vẫn lỗi, chạy trong Console:
-
-```js
-window.__NAILMAP_EXPORT_RESULT__
-```
-
-rồi gửi output để debug.
-
-## Test syntax local
-
-Nếu máy đã có Node.js:
-
-```bash
-node --check export_visible_table.js
-```
-
-Nếu không có lỗi gì hiện ra thì JavaScript syntax hợp lệ.
+2. **Phase 2 — Upload CSV và kiểm tra tiệm nail có thật ngoài đời hay không**
 
 ---
 
-## Phase 2 — Salon verification
+## Phase 1 — Export CSV từ NailMap
 
-Sau khi Phase 1 lấy được CSV ổn định, Phase 2 sẽ đọc chính CSV đó và phân loại salon theo bằng chứng thực tế, dự kiến:
+File: `export_visible_table.js`
 
-- `REAL`
-- `LIKELY_REAL`
-- `REVIEW`
-- `CLOSED`
-- `INVALID`
+1. Đăng nhập NailMap bằng Chrome.
+2. Mở report theo bang và chờ bảng load xong.
+3. Mở DevTools Console.
+4. Copy toàn bộ `export_visible_table.js` và paste vào Console.
+5. Nhấn Enter và chờ tool chạy hết.
 
-Phase 2 chưa được đưa vào bản hiện tại để tránh trộn logic xác minh salon với logic export CSV.
+Tool chỉ export khi số dòng thu được khớp total NailMap hiển thị.
+
+---
+
+# Phase 2 — Nail Salon Verifier
+
+Flow:
+
+```text
+CSV từ NailMap
+   ↓
+Upload vào Nail Salon Verifier
+   ↓
+Google Places kiểm tra business ngoài đời
+   ↓
+So khớp tên + địa chỉ + ZIP + phone + business type + business status
+   ↓
+Tải CSV kết quả
+```
+
+Tool **không gọi một business là fake chỉ vì không tìm thấy**. Nếu bằng chứng chưa đủ, nó trả về `REVIEW` để tránh loại nhầm tiệm thật.
+
+## Kết quả
+
+| Kết quả | Ý nghĩa |
+|---|---|
+| `REAL_NAIL_SALON` | Business khớp và Google phân loại là `nail_salon`, đang hoạt động |
+| `LIKELY_REAL_NAIL_SALON` | Business beauty/spa đang hoạt động và có dấu hiệu rõ là làm nail |
+| `WRONG_BUSINESS` | Business có thật nhưng không phải nail/beauty salon |
+| `CLOSED_PERMANENTLY` | Business khớp nhưng đã đóng vĩnh viễn |
+| `CLOSED_TEMPORARILY` | Business khớp nhưng đang đóng tạm thời |
+| `REVIEW_BEAUTY_BUSINESS` | Có business beauty/spa nhưng chưa đủ bằng chứng để khẳng định là nail salon |
+| `REVIEW` | Chưa đủ bằng chứng |
+| `BAD_DATA` | CSV thiếu dữ liệu quan trọng |
+| `API_ERROR` | Google Places API trả lỗi |
+
+## Chuẩn bị Google Maps API key
+
+Phase 2 dùng **Google Places API (New)**. Bạn cần một Google Maps API key có bật **Places API (New)**.
+
+API key được nhập trực tiếp trong giao diện local và không được ghi vào CSV.
+
+> Nên dùng **Test 20 dòng đầu** trước khi chạy toàn bộ file vì mỗi dòng sẽ dùng Google Places API.
+
+## Chạy trên macOS
+
+Lần đầu:
+
+```bash
+git clone https://github.com/hungdeniubeo/nail-verifier.git
+cd nail-verifier
+bash run_mac.sh
+```
+
+Sau này:
+
+```bash
+cd nail-verifier
+git pull
+bash run_mac.sh
+```
+
+## Chạy trên Windows
+
+```powershell
+git clone https://github.com/hungdeniubeo/nail-verifier.git
+cd nail-verifier
+.\run_windows.bat
+```
+
+## Cách dùng
+
+1. Nhập Google Maps API key.
+2. Upload CSV từ Phase 1.
+3. Chọn `Test 20 dòng đầu`.
+4. Bấm **Bắt đầu kiểm tra**.
+5. Xem kết quả.
+6. Nếu ổn, chọn `Kiểm tra toàn bộ CSV`.
+7. Bấm **Tải CSV kết quả**.
+
+CSV kết quả giữ nguyên dữ liệu gốc và thêm các cột bằng chứng như matched business, Google type/status, score và lý do.
+
+## Test code
+
+```bash
+python -m pytest -q
+```
+
+Hiện có test cho:
+- nhận diện cột NailMap;
+- tự sửa case địa chỉ nằm nhầm ở cột City;
+- nail salon thật;
+- business thật nhưng sai loại;
+- salon đã đóng;
+- không tìm thấy thì `REVIEW`, không tự gắn `FAKE`.
