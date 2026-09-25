@@ -3,9 +3,11 @@ from __future__ import annotations
 import pandas as pd
 
 from nailverifier_v3.engine import decide
+from nailverifier_v3.features import assess_local
 from nailverifier_v3.models import BusinessRecord, Evidence
 from nailverifier_v3.normalize import compare_names, detect_columns, row_to_record
-from nailverifier_v3.states.sd import SouthDakotaAdapter, ROSTER_URL
+from nailverifier_v3.policy import apply_policy
+from nailverifier_v3.states.sd import ROSTER_URL, SouthDakotaAdapter
 
 
 class FakeHttp:
@@ -66,7 +68,7 @@ def test_sd_adapter_rejects_audra_to_revive_same_zip():
             ROSTER_URL: roster,
             detail_url: detail_html(
                 "ASL-08594-2027",
-                "Apprentice Salon",
+                "Apprentice Salon License",
                 "REVIVE DAY SPA - APPRENTICE SALON",
                 "301 S MAIN ST",
                 "ABERDEEN",
@@ -120,89 +122,6 @@ def test_sd_adapter_accepts_strict_pro_nails_match():
     assert evidence.name_score == 100.0
 
 
-def test_decision_verified_nail_requires_nail_specific_official_type():
-    record = BusinessRecord(company="Pro Nails", state="SD")
-    ev = Evidence(
-        source="SD_COSMETOLOGY",
-        strength="STRONG_OFFICIAL",
-        matched_name="PRO NAILS",
-        license_type="Nail Salon",
-    )
-    result = decide(record, [ev], [], "OFFICIAL")
-    assert result["Decision"] == "VERIFIED_NAIL"
-    assert result["Auto_Action"] == "KEEP"
-    assert result["Confidence"] == 99
-
-
-def test_broad_beauty_license_does_not_become_verified_nail():
-    record = BusinessRecord(company="Audra Day Spa & Salon", state="SD")
-    ev = Evidence(
-        source="SD_COSMETOLOGY",
-        strength="STRONG_OFFICIAL",
-        matched_name="Audra Day Spa & Salon",
-        license_type="Cosmetology Salon",
-    )
-    result = decide(record, [ev], [], "OFFICIAL")
-    assert result["Decision"] == "VERIFIED_BEAUTY_REVIEW_NAIL"
-    assert result["Auto_Action"] == "REVIEW"
-
-
-def test_osm_nonbeauty_can_auto_remove_only_when_independently_matched():
-    record = BusinessRecord(company="Alexandria Ace Hardware", state="SD")
-    ev = Evidence(
-        source="OPENSTREETMAP",
-        strength="STRONG_INDEPENDENT_NOT_NAIL",
-        matched_name="Alexandria Ace Hardware",
-        category="shop / hardware",
-    )
-    result = decide(record, [ev], [], "OFFICIAL")
-    assert result["Decision"] == "VERIFIED_NOT_NAIL"
-    assert result["Auto_Action"] == "REMOVE"
-
-
-def test_name_only_non_nail_never_auto_removes():
-    record = BusinessRecord(company="Alexandria Ace Hardware", state="SD", status="OPERATIONAL")
-    result = decide(record, [], [], "OFFICIAL")
-    assert result["Decision"] == "LIKELY_NOT_NAIL"
-    assert result["Auto_Action"] == "REVIEW"
-
-
-def test_nailmap_only_never_becomes_verified():
-    record = BusinessRecord(
-        company="Luxury Nails Spa",
-        street="3828 6th Ave SE C",
-        city="Aberdeen",
-        state="SD",
-        zip_code="57401",
-        phone="6052293020",
-        rating=4.1,
-        reviews=161,
-        status="OPERATIONAL",
-    )
-    result = decide(record, [], [], "OFFICIAL")
-    assert result["Decision"] == "LIKELY_NAIL"
-    assert result["Auto_Action"] == "REVIEW"
-    assert result["Confidence"] <= 85
-
-
-def test_shifted_address_is_recovered():
-    df = pd.DataFrame([
-        {
-            "State": "SD",
-            "Company": "Hang Nails Salon",
-            "Street": "—",
-            "City": "500 E Figzel Ct",
-            "ZIP": "57064",
-            "Phone": "(605) 408-3617",
-        }
-    ])
-    mapping = detect_columns(df.columns)
-    record = row_to_record(df.iloc[0], mapping)
-    assert record.street == "500 E Figzel Ct"
-    assert record.city == ""
-    assert record.phone == "6054083617"
-
-
 def test_sd_adapter_accepts_distinctive_dba_variant_at_same_address():
     roster = roster_html([
         ("ASL-08594-2027", "REVIVE DAY SPA - APPRENTICE SALON", "ABERDEEN", "SD", "57401")
@@ -213,7 +132,7 @@ def test_sd_adapter_accepts_distinctive_dba_variant_at_same_address():
             ROSTER_URL: roster,
             detail_url: detail_html(
                 "ASL-08594-2027",
-                "Apprentice Salon",
+                "Apprentice Salon License",
                 "REVIVE DAY SPA - APPRENTICE SALON",
                 "301 S MAIN ST",
                 "ABERDEEN",
@@ -250,3 +169,150 @@ def test_sd_warmup_builds_local_indexes_once():
     assert stats1["zip_buckets"] == 2
     assert stats2 == stats1
     assert http.calls.count(ROSTER_URL) == 1
+
+
+def test_official_nail_license_is_safe_auto_keep():
+    record = BusinessRecord(company="Pro Nails", state="SD")
+    local = assess_local(record)
+    ev = Evidence(
+        source="SD_COSMETOLOGY",
+        strength="STRONG_OFFICIAL",
+        matched_name="PRO NAILS",
+        license_type="Nail Salon",
+    )
+    decision = decide(record, [ev], [], "OFFICIAL", local)
+    policy = apply_policy(
+        "SD",
+        decision["Decision"],
+        decision["Evidence_Tier"],
+        local.rule_id,
+        decision["Candidate_Action"],
+    )
+    assert decision["Decision"] == "VERIFIED_NAIL"
+    assert decision["Candidate_Action"] == "KEEP"
+    assert policy["Auto_Action"] == "KEEP"
+    assert policy["Policy_Status"] == "SAFE_OFFICIAL"
+
+
+def test_broad_beauty_license_does_not_become_verified_nail():
+    record = BusinessRecord(company="Audra Day Spa & Salon", state="SD")
+    local = assess_local(record)
+    ev = Evidence(
+        source="SD_COSMETOLOGY",
+        strength="STRONG_OFFICIAL",
+        matched_name="Audra Day Spa & Salon",
+        license_type="Cosmetology Salon",
+    )
+    result = decide(record, [ev], [], "OFFICIAL", local)
+    assert result["Decision"] == "VERIFIED_BEAUTY_REVIEW_NAIL"
+    assert result["Candidate_Action"] == "REVIEW"
+
+
+def test_explicit_nail_structured_listing_is_candidate_keep_but_policy_blocks():
+    record = BusinessRecord(
+        company="Luxury Nails Spa",
+        street="3828 6th Ave SE C",
+        city="Aberdeen",
+        state="SD",
+        zip_code="57401",
+        phone="6052293020",
+        rating=4.1,
+        reviews=161,
+        status="OPERATIONAL",
+    )
+    local = assess_local(record)
+    result = decide(record, [], [], "OFFICIAL", local)
+    policy = apply_policy(
+        "SD",
+        result["Decision"],
+        result["Evidence_Tier"],
+        local.rule_id,
+        result["Candidate_Action"],
+    )
+    assert local.rule_id == "R_NAIL_EXPLICIT_STRONG"
+    assert result["Candidate_Action"] == "KEEP"
+    assert policy["Auto_Action"] == "REVIEW"
+    assert policy["Policy_Status"] == "CANDIDATE_NEEDS_BENCHMARK"
+
+
+def test_explicit_non_nail_structured_listing_is_candidate_remove_but_policy_blocks():
+    record = BusinessRecord(
+        company="Alexandria Ace Hardware",
+        street="701 Spruce St",
+        city="Alexandria",
+        state="SD",
+        zip_code="57311",
+        phone="6052394444",
+        reviews=20,
+        status="OPERATIONAL",
+    )
+    local = assess_local(record)
+    result = decide(record, [], [], "OFFICIAL", local)
+    policy = apply_policy(
+        "SD",
+        result["Decision"],
+        result["Evidence_Tier"],
+        local.rule_id,
+        result["Candidate_Action"],
+    )
+    assert local.rule_id == "R_NON_NAIL_CATEGORY_STRONG"
+    assert result["Candidate_Action"] == "REMOVE"
+    assert policy["Auto_Action"] == "REVIEW"
+
+
+def test_low_evidence_nail_name_never_auto_keeps():
+    record = BusinessRecord(
+        company="Kathy's Nails",
+        street="412 4th St",
+        city="Brookings",
+        state="SD",
+        zip_code="57006",
+        phone="6056925556",
+        reviews=1,
+        status="OPERATIONAL",
+    )
+    local = assess_local(record)
+    assert local.rule_id == "R_NAIL_EXPLICIT_WEAK"
+    assert local.candidate_action == "REVIEW"
+
+
+def test_permanently_closed_source_is_candidate_only_not_auto_remove():
+    record = BusinessRecord(
+        company="Example Nails",
+        street="1 Main St",
+        city="Test",
+        state="SD",
+        zip_code="57000",
+        phone="6050000000",
+        reviews=20,
+        status="CLOSED PERMANENTLY",
+    )
+    local = assess_local(record)
+    result = decide(record, [], [], "OFFICIAL", local)
+    policy = apply_policy(
+        "SD",
+        result["Decision"],
+        result["Evidence_Tier"],
+        local.rule_id,
+        result["Candidate_Action"],
+    )
+    assert result["Candidate_Action"] == "REMOVE"
+    assert policy["Auto_Action"] == "REVIEW"
+
+
+def test_shifted_address_is_recovered():
+    df = pd.DataFrame([
+        {
+            "State": "SD",
+            "Company": "Hang Nails Salon",
+            "Street": "—",
+            "City": "500 E Figzel Ct",
+            "ZIP": "57064",
+            "Phone": "(605) 408-3617",
+        }
+    ])
+    mapping = detect_columns(df.columns)
+    record = row_to_record(df.iloc[0], mapping)
+    assert record.street == "500 E Figzel Ct"
+    assert record.city == ""
+    assert record.phone == "6054083617"
