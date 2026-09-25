@@ -9,7 +9,7 @@ from verifier import detect_columns, validate_mapping, verify_dataframe
 
 st.set_page_config(page_title="Nail Salon Verifier — FREE", page_icon="💅", layout="wide")
 
-st.title("Nail Salon Verifier — FREE")
+st.title("Nail Salon Verifier — FREE v2.1")
 st.caption("Upload CSV từ NailMap → tool tự kiểm tra bằng nguồn miễn phí → tải CSV kết quả. Không cần Google API key, không cần thẻ.")
 st.caption("Nguồn phụ: © OpenStreetMap contributors. Public Nominatim được gọi tuần tự, tối đa khoảng 1 request/giây và có cache local.")
 
@@ -92,6 +92,19 @@ if "verification_result" in st.session_state:
     result = st.session_state["verification_result"]
     st.divider()
     st.subheader("Kết quả")
+
+    source_failures = result["Reason"].astype(str).str.contains(
+        "license database|roster Business License|401 Client Error",
+        case=False,
+        regex=True,
+    ).sum()
+    if source_failures:
+        st.error(
+            f"Nguồn license chính thức đang lỗi ở {source_failures}/{len(result)} dòng. "
+            "Không nên chạy toàn bộ CSV hoặc tin kết quả REVIEW cho tới khi lỗi nguồn được xử lý."
+        )
+    else:
+        st.success("Nguồn kiểm tra không báo lỗi kết nối trong lần chạy này.")
 
     counts = result["Verdict"].value_counts(dropna=False).to_dict()
     cols = st.columns(5)
