@@ -9,7 +9,7 @@ from verifier import detect_columns, validate_mapping, verify_dataframe
 
 st.set_page_config(page_title="Nail Salon Verifier — FREE", page_icon="💅", layout="wide")
 
-st.title("Nail Salon Verifier — FREE v2.1")
+st.title("Nail Salon Verifier — FREE v2.2")
 st.caption("Upload CSV từ NailMap → tool tự kiểm tra bằng nguồn miễn phí → tải CSV kết quả. Không cần Google API key, không cần thẻ.")
 st.caption("Nguồn phụ: © OpenStreetMap contributors. Public Nominatim được gọi tuần tự, tối đa khoảng 1 request/giây và có cache local.")
 
