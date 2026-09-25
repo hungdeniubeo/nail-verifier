@@ -7,27 +7,33 @@ import streamlit as st
 
 from nailverifier_v3.engine import ENGINE_VERSION, OFFICIAL_ADAPTERS, verify_dataframe
 from nailverifier_v3.normalize import detect_columns, validate_mapping
+from nailverifier_v3.sampling import make_validation_sample
 
-st.set_page_config(page_title="Nail Verifier — Precision v3.1", page_icon="💅", layout="wide")
+st.set_page_config(page_title="Nail Verifier — Precision v3.2", page_icon="💅", layout="wide")
 
-st.title("Nail Verifier — Precision v3.1")
+st.title("Nail Verifier — Precision v3.2")
 st.caption(
-    "Precision-first cho dataset lớn: official state data được ưu tiên; full-pilot không dùng public Nominatim."
+    "Tách Candidate_Action khỏi Auto_Action: thuật toán có thể đề xuất KEEP/REMOVE, "
+    "nhưng chỉ rule đã benchmark đủ mới được tự động hành động."
 )
 st.caption(
-    "SQLite cache/resume giúp chạy lại dataset lớn mà không phải kiểm tra lại các business đã hoàn tất."
+    "Bulk pilot dùng official state batch + local high-precision rules + SQLite cache. "
+    "Public Nominatim không được dùng làm bulk backend."
 )
 
-with st.expander("V3.1 khác gì?", expanded=False):
+with st.expander("V3.2 tối ưu gì?", expanded=False):
     st.markdown(
         """
-- Official roster được tải một lần rồi index local theo ZIP/City.
-- Chỉ những candidate name hợp lý mới mở license detail.
-- DBA/legal-name variants được phép nếu có distinctive name token + location khớp.
-- Các từ generic như spa / salon / beauty / nail / LLC không đủ để match business.
-- Audra Day Spa & Salon không thể match với Revive Day Spa chỉ vì cùng ZIP.
-- Full-pilot tự động tắt public OpenStreetMap/Nominatim để tránh dùng public service như một bulk backend.
-- Kết quả tách thêm Business_Exists và Nail_Service.
+- Rule engine riêng cho tín hiệu local thay vì gom tất cả vào một confidence score.
+- Explicit nail-name + structured listing tạo Candidate KEEP.
+- Explicit non-beauty category + structured listing tạo Candidate REMOVE.
+- Candidate không đồng nghĩa Auto: policy gate chặn rule chưa đủ benchmark.
+- Official nail-specific license vẫn là evidence mạnh nhất.
+- Tách Business_Exists và Nail_Service.
+- Có Rule_ID, Local_Signal, Risk_Flags để audit.
+- Có Shared_Address_Count để phát hiện nhiều business cùng địa chỉ.
+- Có Exact_Record_Duplicate_Count để phát hiện record trùng.
+- Có validation sampler để lấy mẫu cân bằng cho từng loại rule.
 """
     )
 
@@ -58,7 +64,8 @@ if uploaded is not None:
 
     if unsupported:
         st.warning(
-            "Chưa có official adapter cho: %s. Những bang này chưa sẵn sàng để production auto-filter."
+            "Chưa có official adapter cho: %s. Những bang này vẫn được local rule phân nhóm, "
+            "nhưng không được xem là official-verified."
             % ", ".join(unsupported)
         )
 
@@ -88,28 +95,22 @@ if uploaded is not None:
         use_osm = st.checkbox(
             "Dùng OpenStreetMap/Nominatim cho test nhỏ",
             value=True,
-            help="Chỉ dùng cho test nhỏ. Không dùng public Nominatim làm backend cho bulk run.",
+            help="Chỉ dùng để debug/test nhỏ.",
         )
     else:
         use_osm = False
         st.info(
-            "Pilot toàn bộ sẽ chạy official state batch + local rules + cache. "
-            "Public OpenStreetMap/Nominatim được tắt tự động."
+            "Bulk pilot: public OpenStreetMap/Nominatim được tắt. "
+            "Chỉ official batch + local rules + cache."
         )
 
     force_refresh = st.checkbox(
         "Bỏ qua verification cache",
         value=False,
-        help="Chỉ bật khi cần kiểm tra lại bằng engine hiện tại. HTTP source cache vẫn được giữ để tránh tải thừa.",
+        help="Engine version mới tự tách cache cũ. Chỉ bật khi muốn refresh source.",
     )
 
-    if mode.startswith("Pilot"):
-        st.warning(
-            "Đây là PILOT để đo coverage/evidence trên toàn file, chưa phải production auto-filter. "
-            "Không xóa dữ liệu chỉ dựa trên file pilot."
-        )
-
-    if st.button("3. Chạy Precision v3.1", type="primary", use_container_width=True):
+    if st.button("3. Chạy Precision v3.2", type="primary", use_container_width=True):
         progress = st.progress(0)
         progress_text = st.empty()
 
@@ -125,48 +126,51 @@ if uploaded is not None:
                 use_osm=use_osm,
                 force_refresh=force_refresh,
             )
-        st.session_state["v31_result"] = result
-        st.session_state["v31_source"] = uploaded.name
-        st.session_state["v31_mode"] = mode
+
+        st.session_state["v32_result"] = result
+        st.session_state["v32_source"] = uploaded.name
+        st.session_state["v32_mode"] = mode
         progress_text.success("Xong")
 
-if "v31_result" in st.session_state:
-    result = st.session_state["v31_result"]
+if "v32_result" in st.session_state:
+    result = st.session_state["v32_result"]
     st.divider()
-    st.subheader("Kết quả Precision v3.1")
+    st.subheader("Kết quả Precision v3.2")
 
-    counts = result["Decision"].value_counts(dropna=False).to_dict()
+    decisions = result["Decision"].value_counts(dropna=False).to_dict()
+    candidate_keep = int((result["Candidate_Action"] == "KEEP").sum())
+    candidate_remove = int((result["Candidate_Action"] == "REMOVE").sum())
+    auto_keep = int((result["Auto_Action"] == "KEEP").sum())
+    auto_remove = int((result["Auto_Action"] == "REMOVE").sum())
+    official_matches = int(result["Official_Source"].astype(str).str.strip().ne("").sum())
+    source_errors = int(result["Source_Errors"].astype(str).str.strip().ne("").sum())
+
     cols = st.columns(6)
     cols[0].metric("Checked", len(result))
-    cols[1].metric("VERIFIED NAIL", int(counts.get("VERIFIED_NAIL", 0)))
-    cols[2].metric("LIKELY NAIL", int(counts.get("LIKELY_NAIL", 0)))
-    cols[3].metric("VERIFIED NOT NAIL", int(counts.get("VERIFIED_NOT_NAIL", 0)))
-    cols[4].metric("Beauty review", int(counts.get("VERIFIED_BEAUTY_REVIEW_NAIL", 0)))
-    cols[5].metric("Plain REVIEW", int(counts.get("REVIEW", 0)))
-
-    keep_count = int((result["Auto_Action"] == "KEEP").sum())
-    remove_count = int((result["Auto_Action"] == "REMOVE").sum())
-    cache_hits = int((result["Cache_Hit"] == "YES").sum())
-    source_error_rows = int(result["Source_Errors"].astype(str).str.len().gt(0).sum())
-    official_matches = int(result["Official_Source"].astype(str).str.len().gt(0).sum()) if "Official_Source" in result else 0
+    cols[1].metric("Candidate KEEP", candidate_keep)
+    cols[2].metric("Candidate REMOVE", candidate_remove)
+    cols[3].metric("Auto KEEP", auto_keep)
+    cols[4].metric("Auto REMOVE", auto_remove)
+    cols[5].metric("Official matches", official_matches)
 
     st.markdown(
-        "**Pilot metrics:** "
-        f"Official matches {official_matches} · "
-        f"Auto KEEP {keep_count} · "
-        f"Auto REMOVE {remove_count} · "
-        f"Cache hits {cache_hits} · "
-        f"Source errors {source_error_rows}"
+        "LIKELY_NAIL: %d · LIKELY_NOT_NAIL: %d · REVIEW: %d · Source errors: %d"
+        % (
+            int(decisions.get("LIKELY_NAIL", 0)),
+            int(decisions.get("LIKELY_NOT_NAIL", 0)),
+            int(decisions.get("REVIEW", 0)),
+            source_errors,
+        )
     )
 
-    if source_error_rows:
-        st.error(
-            "Có source error. Các dòng lỗi nguồn không được xem là production-safe."
-        )
+    if source_errors:
+        st.error("Có source error. Không dùng các row lỗi nguồn cho production filtering.")
 
-    if st.session_state.get("v31_mode", "").startswith("Pilot"):
+    gated = int((result["Policy_Status"] == "CANDIDATE_NEEDS_BENCHMARK").sum())
+    if gated:
         st.info(
-            "File này dùng để đánh giá pilot coverage. Auto_Action vẫn phải qua benchmark gate trước khi dùng để lọc production."
+            "%d candidate KEEP/REMOVE đang bị policy gate chặn vì rule chưa có đủ benchmark. "
+            "Đây là behavior có chủ đích." % gated
         )
 
     important = [
@@ -178,20 +182,24 @@ if "v31_result" in st.session_state:
             "City",
             "ZIP",
             "Phone",
+            "Status",
             "Business_Exists",
             "Nail_Service",
             "Decision",
             "Confidence",
+            "Rule_ID",
+            "Candidate_Action",
             "Auto_Action",
+            "Policy_Status",
+            "Local_Signal",
+            "Local_Score",
+            "Risk_Flags",
+            "Shared_Address_Count",
+            "Exact_Record_Duplicate_Count",
             "Evidence_Tier",
             "Official_Matched_Name",
             "Official_Matched_Address",
             "Official_License_Type",
-            "Official_License",
-            "Official_Name_Score",
-            "Official_Address_Score",
-            "OSM_Matched_Name",
-            "OSM_Category",
             "Reason",
             "Source_Errors",
             "Cache_Hit",
@@ -200,13 +208,33 @@ if "v31_result" in st.session_state:
     ]
     st.dataframe(result[important], use_container_width=True, hide_index=True)
 
-    source_name = st.session_state.get("v31_source", "nail-map.csv")
-    output_name = source_name.rsplit(".", 1)[0] + "-precision-v31.csv"
+    source_name = st.session_state.get("v32_source", "nail-map.csv")
+    base_name = source_name.rsplit(".", 1)[0]
+
     st.download_button(
-        "Tải CSV Precision v3.1",
+        "Tải CSV Precision v3.2",
         data=result.to_csv(index=False).encode("utf-8-sig"),
-        file_name=output_name,
+        file_name=base_name + "-precision-v32.csv",
         mime="text/csv",
         type="primary",
         use_container_width=True,
     )
+
+    try:
+        sample = make_validation_sample(result)
+    except Exception as exc:
+        st.warning("Chưa tạo được validation sample: %s" % exc)
+        sample = None
+
+    if sample is not None and not sample.empty:
+        st.download_button(
+            "Tải validation sample cân bằng",
+            data=sample.to_csv(index=False).encode("utf-8-sig"),
+            file_name=base_name + "-validation-sample-v32.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        st.caption(
+            "Sample này lấy cân bằng theo Rule_ID. Điền Gold_Label = NAIL / NOT_NAIL / UNKNOWN "
+            "và nguồn kiểm tra để calibrate rule trước khi bật Auto_Action."
+        )
