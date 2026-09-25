@@ -201,3 +201,52 @@ def test_shifted_address_is_recovered():
     assert record.street == "500 E Figzel Ct"
     assert record.city == ""
     assert record.phone == "6054083617"
+
+
+def test_sd_adapter_accepts_distinctive_dba_variant_at_same_address():
+    roster = roster_html([
+        ("ASL-08594-2027", "REVIVE DAY SPA - APPRENTICE SALON", "ABERDEEN", "SD", "57401")
+    ])
+    detail_url = "https://apps.sd.gov/LD19Cosmetology/LicenseDetail.aspx?l=ASL-08594-2027&t=b"
+    http = FakeHttp(
+        {
+            ROSTER_URL: roster,
+            detail_url: detail_html(
+                "ASL-08594-2027",
+                "Apprentice Salon",
+                "REVIVE DAY SPA - APPRENTICE SALON",
+                "301 S MAIN ST",
+                "ABERDEEN",
+                "SD",
+                "57401",
+            ),
+        }
+    )
+    adapter = SouthDakotaAdapter(http)
+    record = BusinessRecord(
+        company="Revive Salon & Day Spa",
+        street="301 S Main St",
+        city="Aberdeen",
+        state="SD",
+        zip_code="57401",
+    )
+    evidence = adapter.verify(record)
+    assert evidence is not None
+    assert evidence.matched_name == "REVIVE DAY SPA - APPRENTICE SALON"
+
+
+def test_sd_warmup_builds_local_indexes_once():
+    roster = roster_html([
+        ("NS-1", "PRO NAILS", "ABERDEEN", "SD", "57401"),
+        ("NS-2", "OTHER NAILS", "TEA", "SD", "57064"),
+    ])
+    http = FakeHttp({ROSTER_URL: roster})
+    adapter = SouthDakotaAdapter(http)
+
+    stats1 = adapter.warmup()
+    stats2 = adapter.warmup()
+
+    assert stats1["roster_rows"] == 2
+    assert stats1["zip_buckets"] == 2
+    assert stats2 == stats1
+    assert http.calls.count(ROSTER_URL) == 1
