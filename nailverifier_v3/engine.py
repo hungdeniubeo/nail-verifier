@@ -21,7 +21,7 @@ from .normalize import (
 from .osm import OSMVerifier
 from .states.sd import SouthDakotaAdapter
 
-ENGINE_VERSION = "3.0.0"
+ENGINE_VERSION = "3.1.0"
 
 OFFICIAL_ADAPTERS = {
     "SD": SouthDakotaAdapter,
@@ -138,6 +138,50 @@ def _flatten_evidence(evidence: List[Evidence]) -> Dict[str, Any]:
                 }
             )
     return out
+
+
+def derive_dimensions(record: BusinessRecord, evidence: List[Evidence], decision: Dict[str, Any]) -> Dict[str, str]:
+    official = next((e for e in evidence if e.strength == "STRONG_OFFICIAL"), None)
+    osm_identity = next(
+        (
+            e
+            for e in evidence
+            if e.source == "OPENSTREETMAP"
+            and e.strength
+            in {
+                "STRONG_INDEPENDENT_NAIL",
+                "STRONG_INDEPENDENT_BEAUTY",
+                "STRONG_INDEPENDENT_NOT_NAIL",
+                "INDEPENDENT_IDENTITY_ONLY",
+            }
+        ),
+        None,
+    )
+
+    if decision.get("Decision") == "CLOSED_PERMANENTLY":
+        exists = "CLOSED"
+    elif official or osm_identity:
+        exists = "VERIFIED_EXISTS"
+    elif normalize_text(record.status) == "operational" and record.phone and record.zip_code:
+        exists = "LIKELY_EXISTS"
+    else:
+        exists = "UNKNOWN"
+
+    d = decision.get("Decision", "")
+    if d == "VERIFIED_NAIL":
+        nail = "VERIFIED_NAIL"
+    elif d == "LIKELY_NAIL":
+        nail = "LIKELY_NAIL"
+    elif d == "VERIFIED_NOT_NAIL":
+        nail = "VERIFIED_NOT_NAIL"
+    elif d == "LIKELY_NOT_NAIL":
+        nail = "LIKELY_NOT_NAIL"
+    elif d == "VERIFIED_BEAUTY_REVIEW_NAIL":
+        nail = "UNKNOWN_NAIL_SERVICE"
+    else:
+        nail = "UNKNOWN"
+
+    return {"Business_Exists": exists, "Nail_Service": nail}
 
 
 def decide(record: BusinessRecord, evidence: List[Evidence], source_errors: List[str], state_support: str) -> Dict[str, Any]:
@@ -312,8 +356,10 @@ class VerificationEngine:
                 source_errors.append("OPENSTREETMAP: %s" % exc)
 
         decision = decide(record, evidence, source_errors, state_support)
+        dimensions = derive_dimensions(record, evidence, decision)
         result: Dict[str, Any] = {
             **decision,
+            **dimensions,
             "State_Support": state_support,
             "Checked_At": utc_now(),
             "Cache_Hit": "NO",
