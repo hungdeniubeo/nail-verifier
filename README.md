@@ -5,110 +5,73 @@ Tool có đúng **2 phase**:
 1. **Phase 1 — Export CSV từ NailMap**
 2. **Phase 2 — Upload CSV và kiểm tra tiệm nail có thật ngoài đời hay không**
 
----
+## Phase 1
 
-## Phase 1 — Export CSV từ NailMap
+Dùng `export_visible_table.js` trên trang NailMap. Tool chỉ export khi số dòng thu được khớp total NailMap hiển thị.
 
-File: `export_visible_table.js`
+## Phase 2 FREE
 
-1. Đăng nhập NailMap bằng Chrome.
-2. Mở report theo bang và chờ bảng load xong.
-3. Mở DevTools Console.
-4. Copy toàn bộ `export_visible_table.js` và paste vào Console.
-5. Nhấn Enter và chờ tool chạy hết.
+Bản hiện tại **không cần Google Maps API key, không cần Billing và không cần thẻ**.
 
-Tool chỉ export khi số dòng thu được khớp total NailMap hiển thị.
+Nguồn kiểm tra:
 
----
+- South Dakota Cosmetology Commission — roster license hiện hành.
+- OpenStreetMap/Nominatim — nguồn phụ cho những dòng chưa xác minh được từ license.
+- Signal có sẵn trong CSV NailMap chỉ dùng để hỗ trợ, không dùng một mình để kết luận.
 
-# Phase 2 — Nail Salon Verifier
+Bản FREE hiện tối ưu cho **South Dakota (SD)**.
 
-Flow:
+### Kết quả
 
-```text
-CSV từ NailMap
-   ↓
-Upload vào Nail Salon Verifier
-   ↓
-Google Places kiểm tra business ngoài đời
-   ↓
-So khớp tên + địa chỉ + ZIP + phone + business type + business status
-   ↓
-Tải CSV kết quả
-```
-
-Tool **không gọi một business là fake chỉ vì không tìm thấy**. Nếu bằng chứng chưa đủ, nó trả về `REVIEW` để tránh loại nhầm tiệm thật.
-
-## Kết quả
-
-| Kết quả | Ý nghĩa |
+| Verdict | Ý nghĩa |
 |---|---|
-| `REAL_NAIL_SALON` | Business khớp và Google phân loại là `nail_salon`, đang hoạt động |
-| `LIKELY_REAL_NAIL_SALON` | Business beauty/spa đang hoạt động và có dấu hiệu rõ là làm nail |
-| `WRONG_BUSINESS` | Business có thật nhưng không phải nail/beauty salon |
-| `CLOSED_PERMANENTLY` | Business khớp nhưng đã đóng vĩnh viễn |
-| `CLOSED_TEMPORARILY` | Business khớp nhưng đang đóng tạm thời |
-| `REVIEW_BEAUTY_BUSINESS` | Có business beauty/spa nhưng chưa đủ bằng chứng để khẳng định là nail salon |
-| `REVIEW` | Chưa đủ bằng chứng |
-| `BAD_DATA` | CSV thiếu dữ liệu quan trọng |
-| `API_ERROR` | Google Places API trả lỗi |
+| `REAL_NAIL_SALON` | Có bằng chứng mạnh từ license hiện hành rằng đây là nail salon |
+| `LIKELY_REAL_NAIL_SALON` | Nguồn phụ khớp khá tốt với nail/beauty business |
+| `WRONG_BUSINESS` | Business rõ ràng là loại khác |
+| `CLOSED_FROM_SOURCE` | CSV nguồn ghi business đã đóng |
+| `REAL_BEAUTY_BUSINESS_REVIEW_NAIL` | Có license beauty/salon thật nhưng chưa đủ chắc để nói riêng nail |
+| `REVIEW` | Chưa đủ bằng chứng, không tự ý gọi fake |
 
-## Chuẩn bị Google Maps API key
+### Chạy trên macOS
 
-Phase 2 dùng **Google Places API (New)**. Bạn cần một Google Maps API key có bật **Places API (New)**.
-
-API key được nhập trực tiếp trong giao diện local và không được ghi vào CSV.
-
-> Nên dùng **Test 20 dòng đầu** trước khi chạy toàn bộ file vì mỗi dòng sẽ dùng Google Places API.
-
-## Chạy trên macOS
-
-Lần đầu:
+Nếu repo đang chạy bản cũ:
 
 ```bash
-git clone https://github.com/hungdeniubeo/nail-verifier.git
-cd nail-verifier
-bash run_mac.sh
-```
-
-Sau này:
-
-```bash
-cd nail-verifier
+cd ~/nail-verifier
 git pull
 bash run_mac.sh
 ```
 
-## Chạy trên Windows
+Sau đó mở:
 
-```powershell
-git clone https://github.com/hungdeniubeo/nail-verifier.git
-cd nail-verifier
-.\run_windows.bat
+```text
+http://localhost:8501
 ```
 
-## Cách dùng
+Không còn ô Google Maps API key.
 
-1. Nhập Google Maps API key.
-2. Upload CSV từ Phase 1.
-3. Chọn `Test 20 dòng đầu`.
-4. Bấm **Bắt đầu kiểm tra**.
+1. Upload CSV.
+2. Chọn **Test 20 dòng đầu**.
+3. Giữ tick **Dùng OpenStreetMap làm nguồn phụ**.
+4. Bấm **Bắt đầu kiểm tra FREE**.
 5. Xem kết quả.
-6. Nếu ổn, chọn `Kiểm tra toàn bộ CSV`.
-7. Bấm **Tải CSV kết quả**.
+6. Nếu ổn mới chạy toàn bộ CSV.
 
-CSV kết quả giữ nguyên dữ liệu gốc và thêm các cột bằng chứng như matched business, Google type/status, score và lý do.
+OpenStreetMap public service được gọi tuần tự và có cache local để tránh gọi lại cùng truy vấn. Vì vậy chạy toàn bộ có thể mất vài phút.
 
-## Test code
+### Test code
 
 ```bash
 python -m pytest -q
 ```
 
 Hiện có test cho:
+
 - nhận diện cột NailMap;
-- tự sửa case địa chỉ nằm nhầm ở cột City;
-- nail salon thật;
-- business thật nhưng sai loại;
-- salon đã đóng;
-- không tìm thấy thì `REVIEW`, không tự gắn `FAKE`.
+- sửa trường hợp Street bị lệch sang City;
+- parse bảng license;
+- nail salon khớp license hiện hành;
+- business rõ ràng sai loại;
+- business đóng cửa;
+- xác minh phụ qua OpenStreetMap;
+- không đủ bằng chứng thì giữ `REVIEW`.
