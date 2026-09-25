@@ -39,6 +39,11 @@ EXPLICIT_NAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
+WEAK_NAIL_HINT_RE = re.compile(
+    r"\b(polish|polished|pinky|tips|toes|claws|lacquer|gloss)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class LocalAssessment:
@@ -58,8 +63,22 @@ class LocalAssessment:
         }
 
 
+def _has_location(record: BusinessRecord) -> bool:
+    return bool(record.zip_code and (record.street or record.city))
+
+
 def _has_identity(record: BusinessRecord) -> bool:
-    return bool(record.zip_code and (record.street or record.city) and record.phone)
+    return bool(_has_location(record) and record.phone)
+
+
+def _explicit_nail_name(name: str) -> bool:
+    if EXPLICIT_NAIL_RE.search(name or ""):
+        return True
+    tokens = re.findall(r"[a-z0-9]+", (name or "").lower())
+    # Catch compact business names such as NativeNails, NailSpa, Nailday,
+    # Nailery, etc. Avoid generic words merely containing singular "nail"
+    # in the middle (for example "thumbnail").
+    return any(token.startswith("nail") or token.endswith("nails") for token in tokens)
 
 
 def _strong_non_nail_name(name: str) -> bool:
@@ -72,8 +91,10 @@ def _strong_non_nail_name(name: str) -> bool:
 def assess_local(record: BusinessRecord) -> LocalAssessment:
     status = normalize_text(record.status)
     operational = status == "operational"
+    location = _has_location(record)
     identity = _has_identity(record)
-    explicit_nail = bool(EXPLICIT_NAIL_RE.search(record.company or ""))
+    explicit_nail = _explicit_nail_name(record.company)
+    weak_nail_hint = bool(WEAK_NAIL_HINT_RE.search(record.company or ""))
     beauty = has_beauty_words(record.company)
     strong_non_nail = _strong_non_nail_name(record.company)
 
@@ -123,6 +144,15 @@ def assess_local(record: BusinessRecord) -> LocalAssessment:
             risk_flags=risks,
         )
 
+    if explicit_nail and operational and location and record.reviews >= 5:
+        return LocalAssessment(
+            rule_id="R_NAIL_EXPLICIT_ADDRESS_STRONG",
+            candidate_action="KEEP",
+            signal="EXPLICIT_NAIL_NAME_PLUS_ADDRESS_AND_REVIEW_ACTIVITY",
+            score=89,
+            risk_flags=risks,
+        )
+
     if explicit_nail and operational:
         return LocalAssessment(
             rule_id="R_NAIL_EXPLICIT_WEAK",
@@ -141,12 +171,30 @@ def assess_local(record: BusinessRecord) -> LocalAssessment:
             risk_flags=risks,
         )
 
+    if strong_non_nail and operational and location and record.reviews >= 5:
+        return LocalAssessment(
+            rule_id="R_NON_NAIL_CATEGORY_ADDRESS_STRONG",
+            candidate_action="REMOVE",
+            signal="EXPLICIT_NON_BEAUTY_CATEGORY_PLUS_ADDRESS_AND_REVIEW_ACTIVITY",
+            score=90,
+            risk_flags=risks,
+        )
+
     if strong_non_nail:
         return LocalAssessment(
             rule_id="R_NON_NAIL_CATEGORY_WEAK",
             candidate_action="REVIEW",
             signal="EXPLICIT_NON_BEAUTY_CATEGORY_BUT_WEAK_IDENTITY",
             score=80,
+            risk_flags=risks,
+        )
+
+    if weak_nail_hint:
+        return LocalAssessment(
+            rule_id="R_NAIL_STYLING_HINT",
+            candidate_action="REVIEW",
+            signal="NAIL_STYLING_WORD_HINT_ONLY",
+            score=60,
             risk_flags=risks,
         )
 
