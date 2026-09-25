@@ -22,7 +22,7 @@ def safe_ratio(numerator: int, denominator: int) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", default="benchmarks/sd_gold.csv")
-    parser.add_argument("--no-osm", action="store_true")
+    parser.add_argument("--with-osm", action="store_true", help="Diagnostic only; production batch profile is official-only")
     args = parser.parse_args()
 
     gold = pd.read_csv(args.file, dtype=str, keep_default_na=False)
@@ -32,7 +32,7 @@ def main() -> None:
 
     checked = verify_dataframe(
         gold[input_columns],
-        use_osm=not args.no_osm,
+        use_osm=args.with_osm,
         force_refresh=True,
     )
     checked["Expected"] = gold["Expected"].values
@@ -68,7 +68,7 @@ def main() -> None:
         ].to_string(index=False)
     )
     print()
-    print("Engine:", ENGINE_VERSION)
+    print("Engine:", ENGINE_VERSION)\n    print("Profile:", "TEST_WITH_OSM" if args.with_osm else "PRODUCTION_OFFICIAL_BATCH")
     print("Gold rows:", len(checked))
     print("Auto-decided KEEP/REMOVE:", len(auto))
     print("KEEP decisions:", len(keeps))
