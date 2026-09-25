@@ -1,27 +1,31 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
 from .cache import CacheDB
+from .features import LocalAssessment, assess_local
 from .http import CachedHttpClient
 from .models import BusinessRecord, Evidence
 from .normalize import (
     detect_columns,
-    has_beauty_words,
     has_nail_words,
+    normalize_street,
     normalize_text,
+    normalize_zip,
     record_identity,
     row_to_record,
     validate_mapping,
 )
 from .osm import OSMVerifier
+from .policy import apply_policy
 from .states.sd import SouthDakotaAdapter
 
-ENGINE_VERSION = "3.1.0"
+ENGINE_VERSION = "3.2.0"
 
 OFFICIAL_ADAPTERS = {
     "SD": SouthDakotaAdapter,
@@ -31,6 +35,7 @@ NAIL_LICENSE_TERMS = {
     "nail salon",
     "nail shop",
     "manicuring salon",
+    "nail technology salon",
 }
 
 BEAUTY_LICENSE_TERMS = {
@@ -39,25 +44,6 @@ BEAUTY_LICENSE_TERMS = {
     "esthetic salon",
     "apprentice salon",
     "beauty salon",
-}
-
-OBVIOUS_NON_NAIL_PATTERNS = {
-    "hardware",
-    "restaurant",
-    "grille",
-    "grocery",
-    "supermarket",
-    "fuel",
-    "gas station",
-    "bank",
-    "hotel",
-    "motel",
-    "church",
-    "building center",
-    "dollar general",
-    "true value",
-    "ace hardware",
-    "auto parts",
 }
 
 
@@ -73,22 +59,6 @@ def _license_is_nail(value: str) -> bool:
 def _license_is_beauty(value: str) -> bool:
     n = normalize_text(value)
     return _license_is_nail(value) or any(term in n for term in BEAUTY_LICENSE_TERMS)
-
-
-def _obvious_non_nail_name(value: str) -> bool:
-    n = normalize_text(value)
-    if has_nail_words(value) or has_beauty_words(value):
-        return False
-    return any(term in n for term in OBVIOUS_NON_NAIL_PATTERNS)
-
-
-def _closed_status(value: str) -> Optional[str]:
-    n = normalize_text(value)
-    if "closed permanently" in n or "permanently closed" in n:
-        return "CLOSED_PERMANENTLY"
-    if "closed temporarily" in n or "temporarily closed" in n:
-        return "TEMPORARILY_CLOSED"
-    return None
 
 
 def _flatten_evidence(evidence: List[Evidence]) -> Dict[str, Any]:
@@ -140,9 +110,13 @@ def _flatten_evidence(evidence: List[Evidence]) -> Dict[str, Any]:
     return out
 
 
-def derive_dimensions(record: BusinessRecord, evidence: List[Evidence], decision: Dict[str, Any]) -> Dict[str, str]:
+def derive_dimensions(
+    record: BusinessRecord,
+    evidence: List[Evidence],
+    decision: Dict[str, Any],
+) -> Dict[str, str]:
     official = next((e for e in evidence if e.strength == "STRONG_OFFICIAL"), None)
-    osm_identity = next(
+    independent_identity = next(
         (
             e
             for e in evidence
@@ -158,16 +132,16 @@ def derive_dimensions(record: BusinessRecord, evidence: List[Evidence], decision
         None,
     )
 
-    if decision.get("Decision") == "CLOSED_PERMANENTLY":
+    d = decision.get("Decision", "")
+    if d == "CLOSED_PERMANENTLY":
         exists = "CLOSED"
-    elif official or osm_identity:
+    elif official or independent_identity:
         exists = "VERIFIED_EXISTS"
     elif normalize_text(record.status) == "operational" and record.phone and record.zip_code:
         exists = "LIKELY_EXISTS"
     else:
         exists = "UNKNOWN"
 
-    d = decision.get("Decision", "")
     if d == "VERIFIED_NAIL":
         nail = "VERIFIED_NAIL"
     elif d == "LIKELY_NAIL":
@@ -184,53 +158,59 @@ def derive_dimensions(record: BusinessRecord, evidence: List[Evidence], decision
     return {"Business_Exists": exists, "Nail_Service": nail}
 
 
-def decide(record: BusinessRecord, evidence: List[Evidence], source_errors: List[str], state_support: str) -> Dict[str, Any]:
-    closed = _closed_status(record.status)
-    if closed == "CLOSED_PERMANENTLY":
-        return {
-            "Decision": "CLOSED_PERMANENTLY",
-            "Confidence": 95,
-            "Auto_Action": "REMOVE",
-            "Reason": "NailMap source marks this business permanently closed.",
-            "Evidence_Tier": "SOURCE_STATUS",
-        }
-    if closed == "TEMPORARILY_CLOSED":
-        return {
-            "Decision": "TEMPORARILY_CLOSED",
-            "Confidence": 90,
-            "Auto_Action": "REVIEW",
-            "Reason": "NailMap source marks this business temporarily closed; do not permanently remove automatically.",
-            "Evidence_Tier": "SOURCE_STATUS",
-        }
-
+def decide(
+    record: BusinessRecord,
+    evidence: List[Evidence],
+    source_errors: List[str],
+    state_support: str,
+    local: LocalAssessment,
+) -> Dict[str, Any]:
     official = next((e for e in evidence if e.strength == "STRONG_OFFICIAL"), None)
     osm_nail = next((e for e in evidence if e.strength == "STRONG_INDEPENDENT_NAIL"), None)
     osm_beauty = next((e for e in evidence if e.strength == "STRONG_INDEPENDENT_BEAUTY"), None)
     osm_not_nail = next((e for e in evidence if e.strength == "STRONG_INDEPENDENT_NOT_NAIL"), None)
 
+    if local.rule_id == "R_STATUS_PERMANENTLY_CLOSED":
+        return {
+            "Decision": "CLOSED_PERMANENTLY",
+            "Confidence": local.score,
+            "Candidate_Action": "REMOVE",
+            "Reason": "NailMap marks the business permanently closed. V3.2 treats this as a removal candidate, not an automatic removal, until the rule is benchmark-validated.",
+            "Evidence_Tier": "SOURCE_STATUS",
+        }
+
+    if local.rule_id == "R_STATUS_TEMPORARILY_CLOSED":
+        return {
+            "Decision": "TEMPORARILY_CLOSED",
+            "Confidence": local.score,
+            "Candidate_Action": "REVIEW",
+            "Reason": "NailMap marks the business temporarily closed; permanent removal is not allowed.",
+            "Evidence_Tier": "SOURCE_STATUS",
+        }
+
     if official and _license_is_nail(official.license_type):
         return {
             "Decision": "VERIFIED_NAIL",
             "Confidence": 99,
-            "Auto_Action": "KEEP",
-            "Reason": "Strict name/location match to a current official state business license whose license type is nail-specific.",
+            "Candidate_Action": "KEEP",
+            "Reason": "Strict identity/location match to a current official state license whose license type is nail-specific.",
             "Evidence_Tier": "OFFICIAL_STATE",
         }
 
     if official and _license_is_beauty(official.license_type):
-        if has_nail_words(record.company) or osm_nail:
+        if local.rule_id == "R_NAIL_EXPLICIT_STRONG" or osm_nail:
             return {
                 "Decision": "LIKELY_NAIL",
-                "Confidence": 94 if osm_nail else 91,
-                "Auto_Action": "KEEP_REVIEW_OPTIONAL",
-                "Reason": "Business identity is verified by a current official beauty/salon license and the business has an independent or name-level nail signal.",
+                "Confidence": 96 if osm_nail else 93,
+                "Candidate_Action": "KEEP",
+                "Reason": "Official source verifies the beauty business identity, and a separate nail-service signal is present. Candidate KEEP still requires policy validation unless the license itself is nail-specific.",
                 "Evidence_Tier": "OFFICIAL_STATE_PLUS_NAIL_SIGNAL",
             }
         return {
             "Decision": "VERIFIED_BEAUTY_REVIEW_NAIL",
             "Confidence": 95,
-            "Auto_Action": "REVIEW",
-            "Reason": "The business is real and licensed as a beauty/salon business, but available evidence does not prove it offers nail services.",
+            "Candidate_Action": "REVIEW",
+            "Reason": "Official source verifies a real beauty/salon business, but available evidence does not prove nail services.",
             "Evidence_Tier": "OFFICIAL_STATE",
         }
 
@@ -238,17 +218,17 @@ def decide(record: BusinessRecord, evidence: List[Evidence], source_errors: List
         return {
             "Decision": "VERIFIED_NOT_NAIL",
             "Confidence": 97,
-            "Auto_Action": "REMOVE",
-            "Reason": "Independent OpenStreetMap identity/location match classifies the same storefront as a definite non-beauty business.",
+            "Candidate_Action": "REMOVE",
+            "Reason": "Independent identity/location match classifies the same storefront as a definite non-beauty business.",
             "Evidence_Tier": "INDEPENDENT_OSM",
         }
 
     if osm_nail:
         return {
             "Decision": "LIKELY_NAIL",
-            "Confidence": 90,
-            "Auto_Action": "KEEP_REVIEW_OPTIONAL",
-            "Reason": "Independent OpenStreetMap identity/location match indicates nail services, but no strict official nail-license match was available.",
+            "Confidence": 92,
+            "Candidate_Action": "KEEP",
+            "Reason": "Independent identity/location match indicates nail services; candidate KEEP remains benchmark-gated.",
             "Evidence_Tier": "INDEPENDENT_OSM",
         }
 
@@ -256,53 +236,63 @@ def decide(record: BusinessRecord, evidence: List[Evidence], source_errors: List
         return {
             "Decision": "VERIFIED_BEAUTY_REVIEW_NAIL",
             "Confidence": 88,
-            "Auto_Action": "REVIEW",
-            "Reason": "Independent source verifies the business as beauty-related, but nail services are not proven.",
+            "Candidate_Action": "REVIEW",
+            "Reason": "Independent source verifies a beauty-related business, but nail services are not proven.",
             "Evidence_Tier": "INDEPENDENT_OSM",
         }
 
-    has_identity = bool(record.phone and record.zip_code and (record.street or record.city))
-    if has_nail_words(record.company) and normalize_text(record.status) == "operational" and has_identity and record.reviews >= 3:
-        confidence = 78
-        if record.reviews >= 10:
-            confidence += 3
-        if record.reviews >= 50:
-            confidence += 2
-        if record.rating >= 4.0:
-            confidence += 2
+    if local.rule_id == "R_NAIL_EXPLICIT_STRONG":
         return {
             "Decision": "LIKELY_NAIL",
-            "Confidence": min(confidence, 85),
-            "Auto_Action": "REVIEW",
-            "Reason": "NailMap has a strong nail-name, active listing, address/phone and reviews, but v3 found no independent strict verification.",
-            "Evidence_Tier": "NAILMAP_ONLY",
+            "Confidence": local.score,
+            "Candidate_Action": "KEEP",
+            "Reason": "Explicit nail-service name plus operational structured listing (address/ZIP/phone/reviews). This is a high-precision local candidate, but not independent verification.",
+            "Evidence_Tier": "NAILMAP_STRUCTURED",
         }
 
-    if _obvious_non_nail_name(record.company):
+    if local.rule_id == "R_NAIL_EXPLICIT_WEAK":
+        return {
+            "Decision": "LIKELY_NAIL",
+            "Confidence": local.score,
+            "Candidate_Action": "REVIEW",
+            "Reason": "Business name explicitly indicates nail service, but identity/review signals are incomplete.",
+            "Evidence_Tier": "NAILMAP_NAME_ONLY",
+        }
+
+    if local.rule_id == "R_NON_NAIL_CATEGORY_STRONG":
         return {
             "Decision": "LIKELY_NOT_NAIL",
-            "Confidence": 75,
-            "Auto_Action": "REVIEW",
-            "Reason": "Business name strongly suggests a non-nail category, but no independent identity/category source verified it in this run.",
-            "Evidence_Tier": "NAME_HEURISTIC_ONLY",
+            "Confidence": local.score,
+            "Candidate_Action": "REMOVE",
+            "Reason": "Business name is a high-precision non-beauty category and the listing has structured identity data. Removal remains benchmark-gated.",
+            "Evidence_Tier": "NAILMAP_STRUCTURED",
+        }
+
+    if local.rule_id == "R_NON_NAIL_CATEGORY_WEAK":
+        return {
+            "Decision": "LIKELY_NOT_NAIL",
+            "Confidence": local.score,
+            "Candidate_Action": "REVIEW",
+            "Reason": "Business name strongly suggests a non-beauty category, but identity data is incomplete.",
+            "Evidence_Tier": "NAILMAP_NAME_ONLY",
         }
 
     if state_support == "UNSUPPORTED" and not evidence:
         return {
             "Decision": "UNSUPPORTED_STATE_REVIEW",
-            "Confidence": 0,
-            "Auto_Action": "REVIEW",
-            "Reason": "No official verifier adapter is installed for this state yet and no strong independent evidence was found.",
-            "Evidence_Tier": "NONE",
+            "Confidence": local.score,
+            "Candidate_Action": "REVIEW",
+            "Reason": "No official verifier adapter is installed for this state and no benchmark-safe local rule can auto-act.",
+            "Evidence_Tier": "LOCAL_ONLY",
         }
 
-    reason = "Insufficient evidence for a precision-first decision."
+    reason = "Insufficient evidence for a precision-first nail-service decision."
     if source_errors:
         reason += " One or more verification sources returned an error; row was not auto-classified."
     return {
         "Decision": "REVIEW",
-        "Confidence": 20 if source_errors else 30,
-        "Auto_Action": "REVIEW",
+        "Confidence": 20 if source_errors else max(30, local.score),
+        "Candidate_Action": "REVIEW",
         "Reason": reason,
         "Evidence_Tier": "NONE",
     }
@@ -334,6 +324,7 @@ class VerificationEngine:
                 cached["Cache_Hit"] = "YES"
                 return cached
 
+        local = assess_local(record)
         evidence: List[Evidence] = []
         source_errors: List[str] = []
         adapter = self._adapter(record.state)
@@ -355,11 +346,21 @@ class VerificationEngine:
             except Exception as exc:
                 source_errors.append("OPENSTREETMAP: %s" % exc)
 
-        decision = decide(record, evidence, source_errors, state_support)
+        decision = decide(record, evidence, source_errors, state_support, local)
+        policy = apply_policy(
+            record.state,
+            decision["Decision"],
+            decision["Evidence_Tier"],
+            local.rule_id,
+            decision["Candidate_Action"],
+        )
         dimensions = derive_dimensions(record, evidence, decision)
+
         result: Dict[str, Any] = {
             **decision,
+            **policy,
             **dimensions,
+            **local.to_dict(),
             "State_Support": state_support,
             "Checked_At": utc_now(),
             "Cache_Hit": "NO",
@@ -367,9 +368,21 @@ class VerificationEngine:
             **_flatten_evidence(evidence),
         }
 
+        # Do not cache source failures so a later run can retry.
         if not source_errors:
             self.cache.set_verification(key, config_version, result)
         return result
+
+
+def _address_group_key(record: BusinessRecord) -> str:
+    return "|".join(
+        [
+            normalize_street(record.street, drop_unit=False),
+            normalize_text(record.city),
+            record.state.upper(),
+            normalize_zip(record.zip_code),
+        ]
+    )
 
 
 def verify_dataframe(
@@ -386,25 +399,39 @@ def verify_dataframe(
     work = df.head(limit).copy() if limit else df.copy()
     verifier = engine or VerificationEngine(cache_path=cache_path, use_osm=use_osm)
 
+    records = [row_to_record(row, mapping) for _, row in work.iterrows()]
+    identity_counts = Counter(record_identity(record) for record in records)
+    address_counts = Counter(_address_group_key(record) for record in records)
+
     rows: List[Dict[str, Any]] = []
     total = len(work)
-    for pos, (_, row) in enumerate(work.iterrows(), start=1):
-        record = row_to_record(row, mapping)
+
+    for pos, record in enumerate(records, start=1):
         try:
             result = verifier.verify_record(record, force_refresh=force_refresh)
         except Exception as exc:
+            local = assess_local(record)
             result = {
                 "Decision": "ERROR_REVIEW",
                 "Confidence": 0,
+                "Candidate_Action": "REVIEW",
                 "Auto_Action": "REVIEW",
+                "Policy_Status": "SOURCE_ERROR",
                 "Reason": str(exc),
                 "Evidence_Tier": "ERROR",
+                **local.to_dict(),
+                "Business_Exists": "UNKNOWN",
+                "Nail_Service": "UNKNOWN",
                 "State_Support": "UNKNOWN",
                 "Checked_At": utc_now(),
                 "Cache_Hit": "NO",
                 "Source_Errors": str(exc),
             }
+
+        result["Exact_Record_Duplicate_Count"] = identity_counts[record_identity(record)]
+        result["Shared_Address_Count"] = address_counts[_address_group_key(record)]
         rows.append(result)
+
         if progress:
             progress(pos, total, record.company)
 
