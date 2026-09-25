@@ -198,7 +198,7 @@ def decide(
         }
 
     if official and _license_is_beauty(official.license_type):
-        if local.rule_id == "R_NAIL_EXPLICIT_STRONG" or osm_nail:
+        if local.rule_id in {"R_NAIL_EXPLICIT_STRONG", "R_NAIL_EXPLICIT_ADDRESS_STRONG"} or osm_nail:
             return {
                 "Decision": "LIKELY_NAIL",
                 "Confidence": 96 if osm_nail else 93,
@@ -241,7 +241,7 @@ def decide(
             "Evidence_Tier": "INDEPENDENT_OSM",
         }
 
-    if local.rule_id == "R_NAIL_EXPLICIT_STRONG":
+    if local.rule_id in {"R_NAIL_EXPLICIT_STRONG", "R_NAIL_EXPLICIT_ADDRESS_STRONG"}:
         return {
             "Decision": "LIKELY_NAIL",
             "Confidence": local.score,
@@ -250,7 +250,7 @@ def decide(
             "Evidence_Tier": "NAILMAP_STRUCTURED",
         }
 
-    if local.rule_id == "R_NAIL_EXPLICIT_WEAK":
+    if local.rule_id in {"R_NAIL_EXPLICIT_WEAK", "R_NAIL_STYLING_HINT"}:
         return {
             "Decision": "LIKELY_NAIL",
             "Confidence": local.score,
@@ -259,7 +259,7 @@ def decide(
             "Evidence_Tier": "NAILMAP_NAME_ONLY",
         }
 
-    if local.rule_id == "R_NON_NAIL_CATEGORY_STRONG":
+    if local.rule_id in {"R_NON_NAIL_CATEGORY_STRONG", "R_NON_NAIL_CATEGORY_ADDRESS_STRONG"}:
         return {
             "Decision": "LIKELY_NOT_NAIL",
             "Confidence": local.score,
