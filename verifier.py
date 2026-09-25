@@ -110,6 +110,16 @@ def normalize_phone(value: Any) -> str:
     return digits if len(digits) >= 7 else ""
 
 
+def parse_number(value: Any, default: float = 0.0) -> float:
+    text = clean(value)
+    if not text:
+        return default
+    try:
+        return float(text.replace(",", ""))
+    except (TypeError, ValueError):
+        return default
+
+
 def looks_like_street(value: Any) -> bool:
     text = normalize(value)
     if not text:
@@ -742,23 +752,53 @@ def verify_row(
             extra = f" OpenStreetMap lỗi: {exc}"
             base["Reason"] = (base["Reason"] + extra).strip()
 
-    try:
-        reviews = int(float(data.get("reviews") or 0))
-    except ValueError:
-        reviews = 0
+    reviews = int(parse_number(data.get("reviews"), 0))
+    rating = parse_number(data.get("rating"), 0.0)
+    has_identity = bool(
+        data.get("phone")
+        and data.get("zip")
+        and (data.get("street") or data.get("city"))
+    )
+    nail_name = has_words(company, NAIL_WORDS)
+    operational = normalize(status) == "operational"
 
-    if (
-        has_words(company, NAIL_WORDS)
-        and normalize(status) == "operational"
-        and reviews >= 3
-    ):
+    # Strong NailMap signals are useful practical evidence, but they are not
+    # independent verification. Therefore promote them only to LIKELY_REAL.
+    if nail_name and operational and has_identity and reviews >= 3:
+        confidence = 78
+        if reviews >= 10:
+            confidence += 4
+        if reviews >= 30:
+            confidence += 3
+        if reviews >= 100:
+            confidence += 2
+        if rating >= 4.0:
+            confidence += 2
+        confidence = min(confidence, 89)
+        return {
+            **base,
+            "Is_Real_Nail_Salon": "YES",
+            "Verdict": "LIKELY_REAL_NAIL_SALON",
+            "Confidence": confidence,
+            "Reason": (
+                "Tên cho thấy là nail salon và record NailMap có tín hiệu hoạt động mạnh "
+                f"(OPERATIONAL, địa chỉ/phone đầy đủ, rating {rating:g}, {reviews} reviews). "
+                "Chưa match được nguồn độc lập miễn phí nên xếp LIKELY_REAL thay vì VERIFIED."
+            ),
+        }
+
+    if nail_name and operational:
         return {
             **base,
             "Is_Real_Nail_Salon": "REVIEW",
             "Verdict": "REVIEW_NAILMAP_SIGNAL",
             "Confidence": 55,
-            "Reason": "Tên giống nail salon và NailMap có trạng thái/review, nhưng chưa có bằng chứng độc lập đủ mạnh từ nguồn miễn phí.",
+            "Reason": (
+                "Tên giống nail salon nhưng record chưa đủ tín hiệu mạnh "
+                "(cần address/phone và review) và chưa match được nguồn độc lập."
+            ),
         }
+
 
     return {
         **base,
