@@ -9,7 +9,7 @@ from urllib3.util.retry import Retry
 
 from .cache import CacheDB
 
-USER_AGENT = "NailVerifier/3.0 (+https://github.com/hungdeniubeo/nail-verifier)"
+USER_AGENT = "NailVerifier/3.1 (+https://github.com/hungdeniubeo/nail-verifier)"
 
 
 class CachedHttpClient:
