@@ -5,10 +5,13 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 DEFAULT_TARGETS: Dict[str, int] = {
-    "R_NAIL_EXPLICIT_STRONG": 30,
-    "R_NON_NAIL_CATEGORY_STRONG": 20,
+    "R_NAIL_EXPLICIT_STRONG": 25,
+    "R_NAIL_EXPLICIT_ADDRESS_STRONG": 15,
+    "R_NON_NAIL_CATEGORY_STRONG": 15,
+    "R_NON_NAIL_CATEGORY_ADDRESS_STRONG": 10,
     "R_BEAUTY_AMBIGUOUS": 20,
     "R_NAIL_EXPLICIT_WEAK": 10,
+    "R_NAIL_STYLING_HINT": 10,
     "R_UNKNOWN": 10,
 }
 
