@@ -1,30 +1,22 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable
+from urllib.parse import urljoin
 
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 
-GOOGLE_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
-GOOGLE_FIELD_MASK = ",".join(
-    [
-        "places.id",
-        "places.displayName",
-        "places.formattedAddress",
-        "places.nationalPhoneNumber",
-        "places.businessStatus",
-        "places.primaryType",
-        "places.types",
-        "places.googleMapsUri",
-        "places.rating",
-        "places.userRatingCount",
-    ]
-)
+SD_LICENSE_URL = "https://apps.sd.gov/ld19cosmetology/licenseverification.aspx"
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+USER_AGENT = "NailVerifier/2.0 (https://github.com/hungdeniubeo/nail-verifier)"
 
 COLUMN_ALIASES = {
     "company": ["company", "business", "business name", "business_name", "name", "salon", "salon name"],
@@ -33,22 +25,58 @@ COLUMN_ALIASES = {
     "state": ["state", "st"],
     "zip": ["zip", "zipcode", "zip code", "postal", "postal code"],
     "phone": ["phone", "telephone", "tel", "phone number"],
+    "status": ["status", "business status"],
+    "rating": ["rating", "stars"],
+    "reviews": ["reviews", "review count", "ratings count"],
 }
 
-NAIL_TYPES = {"nail_salon"}
-BEAUTY_TYPES = {
-    "beauty_salon",
-    "beautician",
-    "spa",
-    "hair_salon",
-    "hair_care",
-    "foot_care",
-    "makeup_artist",
-    "skin_care_clinic",
-    "wellness_center",
-}
-NAIL_WORDS = {"nail", "nails", "manicure", "pedicure", "mani", "pedi"}
 INVALID_VALUES = {"", "-", "—", "–", "n/a", "na", "none", "null", "nan"}
+NAIL_WORDS = {"nail", "nails", "manicure", "pedicure", "mani", "pedi"}
+BEAUTY_WORDS = {"salon", "spa", "beauty", "cosmetology", "esthetic", "esthetics", "lashes", "lash", "brows", "brow"}
+
+WRONG_NAME_PATTERNS = [
+    r"\bhardware\b",
+    r"\bdollar general\b",
+    r"\btrue value\b",
+    r"\bbuilding center\b",
+    r"\broadhouse\b",
+    r"\bgrill(?:e)?\b",
+    r"\brestaurant\b",
+    r"\bcafe\b",
+    r"\bcoffee\b",
+    r"\bfuel\b",
+    r"\bgas station\b",
+    r"\bconvenience\b",
+    r"\bgrocery\b",
+    r"\bsupermarket\b",
+    r"\bchurch\b",
+    r"\bbank\b",
+    r"\bauto parts\b",
+    r"\btire\b",
+    r"\bmotors\b",
+    r"\bhotel\b",
+    r"\bmotel\b",
+    r"\bpharmacy\b",
+]
+
+OSM_BEAUTY_TYPES = {"beauty", "hairdresser", "cosmetics", "spa"}
+OSM_WRONG_TYPES = {
+    "hardware",
+    "supermarket",
+    "convenience",
+    "restaurant",
+    "fast_food",
+    "fuel",
+    "hotel",
+    "motel",
+    "church",
+    "place_of_worship",
+    "bank",
+    "car_repair",
+    "car_parts",
+    "department_store",
+    "variety_store",
+}
 
 
 def clean(value: Any) -> str:
@@ -69,6 +97,11 @@ def normalize(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def normalize_zip(value: Any) -> str:
+    match = re.search(r"\b(\d{5})(?:-\d{4})?\b", clean(value))
+    return match.group(1) if match else ""
+
+
 def normalize_phone(value: Any) -> str:
     digits = re.sub(r"\D", "", clean(value))
     if len(digits) == 11 and digits.startswith("1"):
@@ -76,18 +109,15 @@ def normalize_phone(value: Any) -> str:
     return digits if len(digits) >= 7 else ""
 
 
-def normalize_zip(value: Any) -> str:
-    text = clean(value)
-    match = re.search(r"\b(\d{5})(?:-\d{4})?\b", text)
-    return match.group(1) if match else ""
-
-
 def looks_like_street(value: Any) -> bool:
     text = normalize(value)
     if not text:
         return False
     return bool(re.match(r"^\d+\s+", text)) or bool(
-        re.search(r"\b(st|street|ave|avenue|rd|road|blvd|boulevard|dr|drive|ct|court|ln|lane|hwy|highway|way|pl|place|pkwy|parkway)\b", text)
+        re.search(
+            r"\b(st|street|ave|avenue|rd|road|blvd|boulevard|dr|drive|ct|court|ln|lane|hwy|highway|way|pl|place|pkwy|parkway)\b",
+            text,
+        )
     )
 
 
@@ -97,17 +127,18 @@ def detect_columns(columns: Iterable[str]) -> dict[str, str | None]:
     for canonical, aliases in COLUMN_ALIASES.items():
         mapping[canonical] = None
         for alias in aliases:
-            if normalize(alias) in normalized:
-                mapping[canonical] = normalized[normalize(alias)]
+            found = normalized.get(normalize(alias))
+            if found:
+                mapping[canonical] = found
                 break
     return mapping
 
 
 def validate_mapping(mapping: dict[str, str | None]) -> None:
     if not mapping.get("company"):
-        raise ValueError("CSV cần có cột tên tiệm, ví dụ: Company / Business / Name.")
+        raise ValueError("CSV cần có cột tên tiệm, ví dụ Company / Business / Name.")
     if not any(mapping.get(key) for key in ("street", "city", "zip", "phone")):
-        raise ValueError("CSV cần ít nhất một cột vị trí hoặc Phone để tìm business.")
+        raise ValueError("CSV cần ít nhất một cột địa chỉ/ZIP/Phone.")
 
 
 def row_value(row: pd.Series, mapping: dict[str, str | None], key: str) -> str:
@@ -125,315 +156,669 @@ def extract_input(row: pd.Series, mapping: dict[str, str | None]) -> dict[str, s
     return data
 
 
-def build_query(data: dict[str, str]) -> str:
-    parts = [data.get("company", "")]
-    for key in ("street", "city", "state", "zip"):
-        value = clean(data.get(key, ""))
-        if value:
-            parts.append(value)
-    if len(parts) == 1 and data.get("phone"):
-        parts.append(data["phone"])
-    return " ".join(dict.fromkeys(part for part in parts if part))
+def has_words(value: Any, words: set[str]) -> bool:
+    return bool(set(normalize(value).split()) & words)
 
 
-def display_name(place: dict[str, Any]) -> str:
-    value = place.get("displayName")
-    if isinstance(value, dict):
-        return clean(value.get("text"))
-    return clean(value)
+def obvious_wrong_name(company: str) -> bool:
+    value = normalize(company)
+    if has_words(company, NAIL_WORDS | BEAUTY_WORDS):
+        return False
+    return any(re.search(pattern, value) for pattern in WRONG_NAME_PATTERNS)
 
 
-def place_types(place: dict[str, Any]) -> set[str]:
-    values = set(place.get("types") or [])
-    if place.get("primaryType"):
-        values.add(place["primaryType"])
-    return {str(value) for value in values if value}
+def business_status_closed(status: str) -> bool:
+    value = normalize(status)
+    return "closed permanently" in value or "closed temporarily" in value or value.startswith("closed")
 
 
-def extract_street_number(value: Any) -> str:
-    match = re.search(r"\b(\d{1,6})\b", clean(value))
-    return match.group(1) if match else ""
+def _tag_haystack(tag: Any) -> str:
+    attrs = [
+        tag.get("name", ""),
+        tag.get("id", ""),
+        tag.get("placeholder", ""),
+        tag.get("aria-label", ""),
+    ]
+    label_text = ""
+    tag_id = tag.get("id")
+    if tag_id:
+        root = tag.find_parent("form") or tag.find_parent() or tag
+        label = root.find("label", attrs={"for": tag_id}) if hasattr(root, "find") else None
+        if label:
+            label_text = label.get_text(" ", strip=True)
+    parent_text = tag.parent.get_text(" ", strip=True) if tag.parent else ""
+    return normalize(" ".join(attrs + [label_text, parent_text]))
 
 
-def address_score(data: dict[str, str], formatted_address: str) -> float:
-    candidate = normalize(formatted_address)
-    if not candidate:
-        return 0.0
+def _find_control(form: Any, keywords: list[str], tags: tuple[str, ...] = ("input", "select")) -> Any | None:
+    candidates = form.find_all(list(tags))
+    scored: list[tuple[int, Any]] = []
+    for tag in candidates:
+        hay = _tag_haystack(tag)
+        score = sum(5 for kw in keywords if normalize(kw) in hay)
+        attr_hay = normalize(
+            " ".join([tag.get("name", ""), tag.get("id", ""), tag.get("placeholder", "")])
+        )
+        score += sum(10 for kw in keywords if normalize(kw) in attr_hay)
+        if score:
+            scored.append((score, tag))
+    return max(scored, key=lambda item: item[0])[1] if scored else None
 
-    score = 0.0
-    weight = 0.0
 
-    zip_code = data.get("zip", "")
-    if zip_code:
-        weight += 0.25
-        if zip_code in formatted_address:
-            score += 0.25
+def _initial_form_payload(form: Any) -> dict[str, str]:
+    payload: dict[str, str] = {}
+    for tag in form.find_all(["input", "select", "textarea"]):
+        name = tag.get("name")
+        if not name:
+            continue
+        if tag.name == "input":
+            typ = (tag.get("type") or "text").lower()
+            if typ in {"submit", "button", "image", "file"}:
+                continue
+            if typ in {"radio", "checkbox"} and not tag.has_attr("checked"):
+                continue
+            payload[name] = tag.get("value", "")
+        elif tag.name == "select":
+            selected = tag.find("option", selected=True) or tag.find("option")
+            if selected:
+                payload[name] = selected.get("value", selected.get_text(" ", strip=True))
+        else:
+            payload[name] = tag.get_text("", strip=False)
+    return payload
 
-    city = normalize(data.get("city", ""))
-    if city:
-        weight += 0.15
-        if city in candidate:
-            score += 0.15
 
-    state = normalize(data.get("state", ""))
-    if state:
-        weight += 0.10
-        if re.search(rf"\b{re.escape(state)}\b", candidate):
-            score += 0.10
+def _set_business_radio(form: Any, payload: dict[str, str]) -> None:
+    radios = form.find_all("input", attrs={"type": re.compile("radio", re.I)})
+    for radio in radios:
+        if "business" in _tag_haystack(radio):
+            if radio.get("name"):
+                payload[radio["name"]] = radio.get("value", "")
+            return
 
-    street = clean(data.get("street", ""))
-    if street:
-        weight += 0.50
-        number = extract_street_number(street)
-        number_score = 0.0
-        if number:
-            number_score = 0.20 if number in re.findall(r"\b\d{1,6}\b", formatted_address) else 0.0
-        street_similarity = fuzz.token_set_ratio(normalize(street), candidate) / 100.0
-        score += number_score + (0.30 * street_similarity)
 
-    if weight == 0:
-        return 0.0
-    return max(0.0, min(1.0, score / weight))
+def _set_select_by_text(select: Any, payload: dict[str, str], choices: list[str]) -> None:
+    if not select or not select.get("name"):
+        return
+    wanted = {normalize(choice) for choice in choices}
+    for option in select.find_all("option"):
+        text = normalize(option.get_text(" ", strip=True))
+        value = normalize(option.get("value", ""))
+        if text in wanted or value in wanted:
+            payload[select["name"]] = option.get(
+                "value", option.get_text(" ", strip=True)
+            )
+            return
+
+
+def parse_license_rows(html: str) -> list[dict[str, str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[dict[str, str]] = []
+    header_words = {
+        "license",
+        "company",
+        "business",
+        "city",
+        "state",
+        "zip",
+        "expiration",
+        "type",
+        "status",
+    }
+
+    for table in soup.find_all("table"):
+        raw_rows = []
+        for tr in table.find_all("tr"):
+            cells = [
+                clean(cell.get_text(" ", strip=True))
+                for cell in tr.find_all(["th", "td"], recursive=False)
+            ]
+            if cells:
+                raw_rows.append(cells)
+        if len(raw_rows) < 2:
+            continue
+
+        header_index = None
+        for idx, cells in enumerate(raw_rows[:4]):
+            tokens = set()
+            for cell in cells:
+                tokens.update(normalize(cell).split())
+            if len(tokens & header_words) >= 2:
+                header_index = idx
+                break
+        if header_index is None:
+            continue
+
+        headers = [
+            cell or f"column_{i + 1}"
+            for i, cell in enumerate(raw_rows[header_index])
+        ]
+        for cells in raw_rows[header_index + 1 :]:
+            if len(cells) < 2 or all(not cell for cell in cells):
+                continue
+            padded = cells + [""] * max(0, len(headers) - len(cells))
+            row = {
+                headers[i]: padded[i]
+                for i in range(min(len(headers), len(padded)))
+            }
+            row["_raw"] = " | ".join(cells)
+            if any(re.search(r"\d", value) for value in cells) or any(
+                has_words(value, NAIL_WORDS | BEAUTY_WORDS) for value in cells
+            ):
+                results.append(row)
+    return results
+
+
+def _field(row: dict[str, str], aliases: tuple[str, ...]) -> str:
+    for key, value in row.items():
+        nk = normalize(key)
+        if any(normalize(alias) in nk for alias in aliases):
+            return clean(value)
+    return ""
+
+
+def score_license_candidate(
+    data: dict[str, str], candidate: dict[str, str]
+) -> tuple[float, float, bool]:
+    company = _field(candidate, ("company", "business", "name"))
+    raw = candidate.get("_raw", "")
+    target_name = normalize(data.get("company", ""))
+    name_basis = normalize(company or raw)
+    name_score = (
+        fuzz.token_set_ratio(target_name, name_basis) / 100.0
+        if target_name and name_basis
+        else 0.0
+    )
+
+    target_zip = data.get("zip", "")
+    candidate_zip = normalize_zip(_field(candidate, ("zip", "postal")) or raw)
+    zip_match = bool(target_zip and candidate_zip and target_zip == candidate_zip)
+
+    target_city = normalize(data.get("city", ""))
+    candidate_city = normalize(_field(candidate, ("city",)) or raw)
+    city_match = bool(target_city and target_city in candidate_city)
+
+    score = (
+        0.75 * name_score
+        + (0.20 if zip_match else 0.0)
+        + (0.05 if city_match else 0.0)
+    )
+    return min(1.0, score), name_score, zip_match
 
 
 @dataclass
-class Match:
-    place: dict[str, Any]
+class LicenseMatch:
+    candidate: dict[str, str]
     score: float
     name_score: float
-    location_score: float
-    phone_match: bool | None
+    zip_match: bool
 
 
-def score_candidate(data: dict[str, str], place: dict[str, Any]) -> Match:
-    name = display_name(place)
-    name_score = fuzz.token_set_ratio(normalize(data.get("company", "")), normalize(name)) / 100.0
-    location_score = address_score(data, clean(place.get("formattedAddress")))
+class SouthDakotaLicenseClient:
+    """Search the official South Dakota Cosmetology current-license roster.
 
-    input_phone = data.get("phone", "")
-    candidate_phone = normalize_phone(place.get("nationalPhoneNumber"))
-    phone_match: bool | None = None
-    if input_phone and candidate_phone:
-        phone_match = input_phone == candidate_phone
+    The state site uses an ASP.NET form. Field names are discovered at runtime
+    instead of hard-coding ctl00/... IDs. Results are cached by ZIP.
+    """
 
-    if phone_match is True:
-        score = 0.45 * name_score + 0.35 * location_score + 0.20
-    elif phone_match is False:
-        score = 0.50 * name_score + 0.40 * location_score - 0.10
-    else:
-        score = 0.55 * name_score + 0.45 * location_score
-
-    return Match(
-        place=place,
-        score=max(0.0, min(1.0, score)),
-        name_score=name_score,
-        location_score=location_score,
-        phone_match=phone_match,
-    )
-
-
-class GooglePlacesClient:
-    def __init__(self, api_key: str, timeout: int = 20):
-        self.api_key = api_key.strip()
+    def __init__(self, timeout: int = 25, delay_seconds: float = 0.35):
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": USER_AGENT})
         self.timeout = timeout
-        if not self.api_key:
-            raise ValueError("Thiếu Google Maps API key.")
+        self.delay_seconds = delay_seconds
+        self._html: str | None = None
+        self._cache: dict[str, list[dict[str, str]]] = {}
 
-    def search(self, query: str, page_size: int = 5) -> list[dict[str, Any]]:
-        response = requests.post(
-            GOOGLE_TEXT_SEARCH_URL,
-            headers={
-                "Content-Type": "application/json",
-                "X-Goog-Api-Key": self.api_key,
-                "X-Goog-FieldMask": GOOGLE_FIELD_MASK,
-            },
-            json={
-                "textQuery": query,
-                "pageSize": max(1, min(int(page_size), 10)),
-                "languageCode": "en",
-                "regionCode": "US",
+    def _get_page(self) -> str:
+        response = self.session.get(SD_LICENSE_URL, timeout=self.timeout)
+        response.raise_for_status()
+        self._html = response.text
+        return self._html
+
+    def _submit(self, *, zip_code: str = "", company: str = "") -> str:
+        html = self._html or self._get_page()
+        soup = BeautifulSoup(html, "html.parser")
+        form = soup.find("form")
+        if not form:
+            raise RuntimeError(
+                "Không tìm thấy form License Verification của South Dakota."
+            )
+
+        payload = _initial_form_payload(form)
+        _set_business_radio(form, payload)
+
+        company_control = _find_control(form, ["company"])
+        zip_control = _find_control(form, ["zip", "postal"])
+        state_control = _find_control(
+            form, ["state", "province"], tags=("select",)
+        )
+
+        if company_control is not None and company_control.get("name"):
+            payload[company_control["name"]] = company
+        if zip_control is not None and zip_control.get("name"):
+            payload[zip_control["name"]] = zip_code
+        if state_control is not None:
+            _set_select_by_text(
+                state_control, payload, ["SD", "South Dakota"]
+            )
+
+        for keywords in (["first name"], ["last name"], ["license"]):
+            control = _find_control(form, keywords)
+            if (
+                control is not None
+                and control.get("name")
+                and control is not company_control
+            ):
+                payload[control["name"]] = ""
+
+        submit = None
+        for tag in form.find_all(["input", "button"]):
+            typ = (tag.get("type") or "").lower()
+            value = clean(tag.get("value") or tag.get_text(" ", strip=True))
+            if typ in {"submit", "button", ""} and "search" in normalize(value):
+                submit = tag
+                break
+        if submit is not None and submit.get("name"):
+            payload[submit["name"]] = submit.get("value", "Search")
+
+        action = urljoin(
+            SD_LICENSE_URL, form.get("action") or SD_LICENSE_URL
+        )
+        response = self.session.post(
+            action, data=payload, timeout=self.timeout
+        )
+        response.raise_for_status()
+        self._html = response.text
+        if self.delay_seconds:
+            time.sleep(self.delay_seconds)
+        return response.text
+
+    def search_zip(self, zip_code: str) -> list[dict[str, str]]:
+        zip_code = normalize_zip(zip_code)
+        if not zip_code:
+            return []
+        if zip_code in self._cache:
+            return self._cache[zip_code]
+        html = self._submit(zip_code=zip_code)
+        rows = parse_license_rows(html)
+        self._cache[zip_code] = rows
+        return rows
+
+    def search_company(self, company: str) -> list[dict[str, str]]:
+        html = self._submit(company=clean(company))
+        return parse_license_rows(html)
+
+
+class NominatimClient:
+    def __init__(
+        self,
+        cache_file: str | Path = ".cache/nominatim.json",
+        timeout: int = 20,
+        min_interval: float = 1.05,
+    ):
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": USER_AGENT})
+        self.timeout = timeout
+        self.min_interval = min_interval
+        self.last_request = 0.0
+        self.cache_file = Path(cache_file)
+        self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.cache = (
+                json.loads(self.cache_file.read_text(encoding="utf-8"))
+                if self.cache_file.exists()
+                else {}
+            )
+        except Exception:
+            self.cache = {}
+
+    def _save(self) -> None:
+        self.cache_file.write_text(
+            json.dumps(self.cache, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def search(self, data: dict[str, str]) -> list[dict[str, Any]]:
+        query = ", ".join(
+            part
+            for part in [
+                data.get("company"),
+                data.get("street"),
+                data.get("city"),
+                data.get("state"),
+                data.get("zip"),
+            ]
+            if clean(part)
+        )
+        key = normalize(query)
+        if key in self.cache:
+            return self.cache[key]
+
+        wait = self.min_interval - (time.monotonic() - self.last_request)
+        if wait > 0:
+            time.sleep(wait)
+
+        response = self.session.get(
+            NOMINATIM_URL,
+            params={
+                "q": query,
+                "format": "jsonv2",
+                "addressdetails": 1,
+                "extratags": 1,
+                "namedetails": 1,
+                "limit": 5,
+                "countrycodes": "us",
             },
             timeout=self.timeout,
         )
-        if response.status_code >= 400:
-            try:
-                detail = response.json()
-            except Exception:
-                detail = response.text
-            raise RuntimeError(f"Google Places API lỗi {response.status_code}: {detail}")
-        return response.json().get("places", [])
+        self.last_request = time.monotonic()
+        response.raise_for_status()
+        results = response.json()
+        self.cache[key] = results
+        self._save()
+        return results
 
 
-def has_nail_keyword(*values: Any) -> bool:
-    tokens: set[str] = set()
-    for value in values:
-        tokens.update(normalize(value).split())
-    return bool(tokens & NAIL_WORDS)
+def score_osm_candidate(
+    data: dict[str, str], item: dict[str, Any]
+) -> tuple[float, float, bool]:
+    name = clean(
+        (item.get("namedetails") or {}).get("name") or item.get("name") or ""
+    )
+    display = clean(item.get("display_name"))
+    name_score = (
+        fuzz.token_set_ratio(
+            normalize(data.get("company")), normalize(name or display)
+        )
+        / 100.0
+    )
+    zip_match = bool(data.get("zip", "") and data["zip"] in display)
+    street_num = re.match(r"^\s*(\d+)", clean(data.get("street")))
+    number_match = bool(
+        street_num
+        and re.search(
+            rf"\b{re.escape(street_num.group(1))}\b", display
+        )
+    )
+    score = (
+        0.65 * name_score
+        + (0.20 if zip_match else 0.0)
+        + (0.15 if number_match else 0.0)
+    )
+    return min(1.0, score), name_score, zip_match
 
 
-def classify(data: dict[str, str], best: Match | None) -> dict[str, Any]:
-    if best is None:
+def best_osm_match(
+    data: dict[str, str], items: list[dict[str, Any]]
+) -> tuple[dict[str, Any] | None, float]:
+    scored = [
+        (score_osm_candidate(data, item)[0], item) for item in items
+    ]
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return (scored[0][1], scored[0][0]) if scored else (None, 0.0)
+
+
+def osm_type(item: dict[str, Any] | None) -> str:
+    if not item:
+        return ""
+    category = clean(item.get("category"))
+    typ = clean(item.get("type"))
+    beauty = clean((item.get("extratags") or {}).get("beauty"))
+    return " / ".join(
+        part for part in [category, typ, beauty] if part
+    )
+
+
+def osm_is_nail_or_beauty(
+    item: dict[str, Any] | None, company: str
+) -> bool:
+    if not item:
+        return False
+    typ = normalize(item.get("type"))
+    beauty = normalize((item.get("extratags") or {}).get("beauty"))
+    return (
+        typ in OSM_BEAUTY_TYPES
+        or "nail" in beauty
+        or has_words(company, NAIL_WORDS | BEAUTY_WORDS)
+    )
+
+
+def osm_is_wrong_business(item: dict[str, Any] | None) -> bool:
+    if not item:
+        return False
+    return normalize(item.get("type")) in OSM_WRONG_TYPES
+
+
+def best_license_match(
+    data: dict[str, str], candidates: list[dict[str, str]]
+) -> LicenseMatch | None:
+    matches = []
+    for candidate in candidates:
+        score, name_score, zip_match = score_license_candidate(
+            data, candidate
+        )
+        matches.append(
+            LicenseMatch(candidate, score, name_score, zip_match)
+        )
+    matches.sort(key=lambda m: m.score, reverse=True)
+    return matches[0] if matches else None
+
+
+def verify_row(
+    row: pd.Series,
+    mapping: dict[str, str | None],
+    license_client: Any,
+    osm_client: Any | None = None,
+) -> dict[str, Any]:
+    data = extract_input(row, mapping)
+    company = data.get("company", "")
+    status = data.get("status", "")
+
+    base = {
+        "Is_Real_Nail_Salon": "REVIEW",
+        "Verdict": "REVIEW",
+        "Confidence": 0,
+        "Reason": "",
+        "SD_Current_License": "NO_MATCH",
+        "SD_License_Matched_Row": "",
+        "SD_License_Match_Score": "",
+        "OSM_Match": "",
+        "OSM_Type": "",
+        "OSM_Display_Name": "",
+        "OSM_Match_Score": "",
+    }
+
+    if not company:
         return {
-            "Is_Real_Nail_Salon": "REVIEW",
-            "Verdict": "REVIEW",
-            "Confidence": 10,
-            "Reason": "Không tìm thấy business đủ khớp trên Google Places; cần kiểm tra tay.",
+            **base,
+            "Verdict": "BAD_DATA",
+            "Confidence": 100,
+            "Reason": "Thiếu tên business.",
         }
 
-    place = best.place
-    types = place_types(place)
-    primary_type = clean(place.get("primaryType"))
-    status = clean(place.get("businessStatus")) or "UNKNOWN"
-    matched_name = display_name(place)
-    strong_match = best.score >= 0.72 and best.name_score >= 0.60
-    medium_match = best.score >= 0.55 and best.name_score >= 0.50
-    nail_type = bool(types & NAIL_TYPES)
-    beauty_type = bool(types & BEAUTY_TYPES)
-    nail_keyword = has_nail_keyword(data.get("company"), matched_name)
-    confidence = int(round(best.score * 100))
-
-    if strong_match and status in {"CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"}:
-        label = "CLOSED_PERMANENTLY" if status == "CLOSED_PERMANENTLY" else "CLOSED_TEMPORARILY"
+    if business_status_closed(status):
         return {
-            "Is_Real_Nail_Salon": "CLOSED" if (nail_type or (beauty_type and nail_keyword)) else "NO",
-            "Verdict": label,
-            "Confidence": max(75, confidence),
-            "Reason": f"Google Places khớp business nhưng trạng thái là {status}.",
+            **base,
+            "Is_Real_Nail_Salon": "CLOSED",
+            "Verdict": "CLOSED_FROM_SOURCE",
+            "Confidence": 85,
+            "Reason": f"CSV nguồn đang ghi trạng thái {status}.",
         }
 
-    if strong_match and status == "OPERATIONAL" and nail_type:
+    if obvious_wrong_name(company):
         return {
-            "Is_Real_Nail_Salon": "YES",
-            "Verdict": "REAL_NAIL_SALON",
-            "Confidence": max(85, confidence),
-            "Reason": "Google Places khớp tên/vị trí và phân loại business là nail_salon, đang OPERATIONAL.",
-        }
-
-    if strong_match and status == "OPERATIONAL" and beauty_type and nail_keyword:
-        return {
-            "Is_Real_Nail_Salon": "YES",
-            "Verdict": "LIKELY_REAL_NAIL_SALON",
-            "Confidence": max(75, min(94, confidence)),
-            "Reason": "Business đang hoạt động, thuộc nhóm beauty/spa và tên có dấu hiệu dịch vụ nail.",
-        }
-
-    if strong_match and status == "OPERATIONAL" and not beauty_type and not nail_type:
-        return {
+            **base,
             "Is_Real_Nail_Salon": "NO",
             "Verdict": "WRONG_BUSINESS",
-            "Confidence": max(80, confidence),
-            "Reason": f"Google Places khớp business nhưng loại là {primary_type or 'non-beauty'}, không phải nail/beauty salon.",
+            "Confidence": 95,
+            "Reason": "Tên business cho thấy đây rõ ràng là loại hình khác, không phải nail/beauty salon.",
         }
 
-    if medium_match and status == "OPERATIONAL" and beauty_type:
+    license_candidates = []
+    try:
+        if data.get("zip"):
+            license_candidates = license_client.search_zip(data["zip"])
+        else:
+            license_candidates = license_client.search_company(company)
+    except Exception as exc:
+        base["Reason"] = (
+            f"Không truy cập được SD license database: {exc}"
+        )
+
+    lic = best_license_match(data, license_candidates)
+    if lic:
+        base["SD_License_Matched_Row"] = lic.candidate.get("_raw", "")
+        base["SD_License_Match_Score"] = round(lic.score * 100, 1)
+        if (
+            lic.score >= 0.78
+            and lic.name_score >= 0.72
+            and (lic.zip_match or not data.get("zip"))
+        ):
+            base["SD_Current_License"] = "MATCH"
+            lic_text = normalize(lic.candidate.get("_raw", ""))
+
+            if has_words(company, NAIL_WORDS) or "nail" in lic_text:
+                return {
+                    **base,
+                    "Is_Real_Nail_Salon": "YES",
+                    "Verdict": "REAL_NAIL_SALON",
+                    "Confidence": max(
+                        90, int(round(lic.score * 100))
+                    ),
+                    "Reason": "Khớp business trong roster license hiện hành của South Dakota và có dấu hiệu rõ là nail salon.",
+                }
+
+            if has_words(company, BEAUTY_WORDS) or any(
+                word in lic_text
+                for word in ("salon", "cosmetology", "esthetic", "spa")
+            ):
+                return {
+                    **base,
+                    "Is_Real_Nail_Salon": "REVIEW",
+                    "Verdict": "REAL_BEAUTY_BUSINESS_REVIEW_NAIL",
+                    "Confidence": max(
+                        80, int(round(lic.score * 100))
+                    ),
+                    "Reason": "Khớp business có license hiện hành ở South Dakota, nhưng license/name chưa đủ để khẳng định riêng dịch vụ nail.",
+                }
+
+    if osm_client is not None:
+        try:
+            items = osm_client.search(data)
+            item, osm_score = best_osm_match(data, items)
+            if item:
+                base["OSM_Match"] = (
+                    "MATCH" if osm_score >= 0.72 else "WEAK"
+                )
+                base["OSM_Type"] = osm_type(item)
+                base["OSM_Display_Name"] = clean(
+                    item.get("display_name")
+                )
+                base["OSM_Match_Score"] = round(
+                    osm_score * 100, 1
+                )
+
+                if osm_score >= 0.72 and osm_is_wrong_business(item):
+                    return {
+                        **base,
+                        "Is_Real_Nail_Salon": "NO",
+                        "Verdict": "WRONG_BUSINESS",
+                        "Confidence": max(
+                            80, int(round(osm_score * 100))
+                        ),
+                        "Reason": "OpenStreetMap khớp business nhưng loại địa điểm không phải nail/beauty salon.",
+                    }
+
+                if (
+                    osm_score >= 0.72
+                    and osm_is_nail_or_beauty(item, company)
+                ):
+                    verdict = (
+                        "LIKELY_REAL_NAIL_SALON"
+                        if has_words(company, NAIL_WORDS)
+                        else "REVIEW_BEAUTY_BUSINESS"
+                    )
+                    answer = (
+                        "YES"
+                        if verdict == "LIKELY_REAL_NAIL_SALON"
+                        else "REVIEW"
+                    )
+                    return {
+                        **base,
+                        "Is_Real_Nail_Salon": answer,
+                        "Verdict": verdict,
+                        "Confidence": max(
+                            70, int(round(osm_score * 100))
+                        ),
+                        "Reason": "OpenStreetMap khớp tên/vị trí và cho thấy đây là business beauty/nail; không mạnh bằng license chính thức.",
+                    }
+        except Exception as exc:
+            extra = f" OpenStreetMap lỗi: {exc}"
+            base["Reason"] = (base["Reason"] + extra).strip()
+
+    try:
+        reviews = int(float(data.get("reviews") or 0))
+    except ValueError:
+        reviews = 0
+
+    if (
+        has_words(company, NAIL_WORDS)
+        and normalize(status) == "operational"
+        and reviews >= 3
+    ):
         return {
+            **base,
             "Is_Real_Nail_Salon": "REVIEW",
-            "Verdict": "REVIEW_BEAUTY_BUSINESS",
-            "Confidence": max(45, confidence),
-            "Reason": "Tìm thấy business beauty/spa đang hoạt động nhưng chưa đủ bằng chứng để khẳng định là tiệm nail.",
+            "Verdict": "REVIEW_NAILMAP_SIGNAL",
+            "Confidence": 55,
+            "Reason": "Tên giống nail salon và NailMap có trạng thái/review, nhưng chưa có bằng chứng độc lập đủ mạnh từ nguồn miễn phí.",
         }
 
     return {
+        **base,
         "Is_Real_Nail_Salon": "REVIEW",
         "Verdict": "REVIEW",
-        "Confidence": max(20, confidence),
-        "Reason": "Có kết quả Google Places nhưng mức khớp hoặc loại business chưa đủ chắc chắn.",
+        "Confidence": 30 if not base["Reason"] else 20,
+        "Reason": base["Reason"]
+        or "Chưa có đủ bằng chứng miễn phí để khẳng định tiệm nail thật hay business sai.",
     }
-
-
-def verify_row(row: pd.Series, mapping: dict[str, str | None], client: Any, page_size: int = 5) -> dict[str, Any]:
-    data = extract_input(row, mapping)
-    if not data.get("company"):
-        return {"Is_Real_Nail_Salon": "NO", "Verdict": "BAD_DATA", "Confidence": 100, "Reason": "Thiếu tên business.", "Search_Query": ""}
-
-    query = build_query(data)
-    if not query or not any(data.get(k) for k in ("street", "city", "zip", "phone")):
-        return {
-            "Is_Real_Nail_Salon": "REVIEW",
-            "Verdict": "BAD_DATA",
-            "Confidence": 100,
-            "Reason": "Không đủ địa chỉ/ZIP/phone để tìm business đáng tin cậy.",
-            "Search_Query": query,
-        }
-
-    places = client.search(query, page_size=page_size)
-    matches = [score_candidate(data, place) for place in places]
-    matches.sort(key=lambda item: item.score, reverse=True)
-    best = matches[0] if matches else None
-
-    if (best is None or best.score < 0.50) and data.get("phone"):
-        fallback_query = " ".join(
-            part for part in [data["phone"], data.get("city", ""), data.get("state", ""), data.get("zip", "")] if part
-        )
-        fallback_places = client.search(fallback_query, page_size=page_size)
-        fallback_matches = [score_candidate(data, place) for place in fallback_places]
-        fallback_matches.sort(key=lambda item: item.score, reverse=True)
-        if fallback_matches and (best is None or fallback_matches[0].score > best.score):
-            best = fallback_matches[0]
-            query = f"{query} | fallback: {fallback_query}"
-
-    verdict = classify(data, best)
-    result: dict[str, Any] = {**verdict, "Search_Query": query}
-
-    if best is None:
-        result.update({
-            "Matched_Name": "", "Matched_Address": "", "Matched_Phone": "", "Google_Business_Status": "",
-            "Google_Primary_Type": "", "Google_Types": "", "Google_Maps_URL": "", "Google_Rating": "",
-            "Google_Review_Count": "", "Match_Score": 0, "Name_Score": 0, "Location_Score": 0, "Phone_Match": "",
-        })
-        return result
-
-    place = best.place
-    result.update({
-        "Matched_Name": display_name(place),
-        "Matched_Address": clean(place.get("formattedAddress")),
-        "Matched_Phone": clean(place.get("nationalPhoneNumber")),
-        "Google_Business_Status": clean(place.get("businessStatus")),
-        "Google_Primary_Type": clean(place.get("primaryType")),
-        "Google_Types": ", ".join(sorted(place_types(place))),
-        "Google_Maps_URL": clean(place.get("googleMapsUri")),
-        "Google_Rating": place.get("rating", ""),
-        "Google_Review_Count": place.get("userRatingCount", ""),
-        "Match_Score": round(best.score * 100, 1),
-        "Name_Score": round(best.name_score * 100, 1),
-        "Location_Score": round(best.location_score * 100, 1),
-        "Phone_Match": "YES" if best.phone_match is True else "NO" if best.phone_match is False else "",
-    })
-    return result
 
 
 def verify_dataframe(
     df: pd.DataFrame,
-    api_key: str,
     limit: int | None = None,
     progress: Callable[[int, int, str], None] | None = None,
-    delay_seconds: float = 0.05,
-    client: Any | None = None,
+    use_osm: bool = True,
+    license_client: Any | None = None,
+    osm_client: Any | None = None,
 ) -> pd.DataFrame:
     mapping = detect_columns(df.columns)
     validate_mapping(mapping)
     work = df.head(limit).copy() if limit else df.copy()
-    places_client = client or GooglePlacesClient(api_key)
+    lic_client = license_client or SouthDakotaLicenseClient()
+    nom_client = (
+        osm_client
+        if osm_client is not None
+        else (NominatimClient() if use_osm else None)
+    )
 
-    rows: list[dict[str, Any]] = []
+    checked_rows = []
     total = len(work)
-    for position, (_, row) in enumerate(work.iterrows(), start=1):
+    for pos, (_, row) in enumerate(work.iterrows(), start=1):
         name = row_value(row, mapping, "company")
         try:
-            checked = verify_row(row, mapping, places_client)
+            result = verify_row(
+                row, mapping, lic_client, nom_client
+            )
         except Exception as exc:
-            checked = {
+            result = {
                 "Is_Real_Nail_Salon": "REVIEW",
-                "Verdict": "API_ERROR",
+                "Verdict": "ERROR",
                 "Confidence": 0,
                 "Reason": str(exc),
-                "Search_Query": build_query(extract_input(row, mapping)),
             }
-        rows.append(checked)
+        checked_rows.append(result)
         if progress:
-            progress(position, total, name)
-        if delay_seconds > 0 and position < total:
-            time.sleep(delay_seconds)
+            progress(pos, total, name)
 
-    verification = pd.DataFrame(rows, index=work.index)
+    verification = pd.DataFrame(checked_rows, index=work.index)
     return pd.concat([work, verification], axis=1)
