@@ -51,7 +51,7 @@ class LocalAssessment:
     def to_dict(self) -> Dict[str, object]:
         return {
             "Rule_ID": self.rule_id,
-            "Candidate_Action": self.candidate_action,
+            "Local_Candidate_Action": self.candidate_action,
             "Local_Signal": self.signal,
             "Local_Score": self.score,
             "Risk_Flags": " | ".join(self.risk_flags),
