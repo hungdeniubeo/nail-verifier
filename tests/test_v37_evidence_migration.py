@@ -100,3 +100,51 @@ def test_not_nail_without_affirmative_nonbeauty_category_is_rejected(tmp_path: P
     accepted, rejected = build_registry([str(source)])
     assert accepted.empty
     assert rejected.iloc[0]["Rejection_Reason"] == "NOT_NAIL_CATEGORY_NOT_AFFIRMATIVE"
+
+
+def test_location_specific_primary_source_for_another_city_is_rejected(tmp_path: Path):
+    from scripts.build_verified_business_evidence import build_registry
+
+    source = _write(
+        tmp_path / "gold.csv",
+        [
+            row(
+                "Coffee Cup Fuel Stop",
+                "NOT_NAIL",
+                "https://www.coffeecupfuelstops.com/hartford",
+                "Official site identifies fuel stop/convenience/travel store.",
+                City="Vivian",
+                Street="US-83",
+                ZIP="57576",
+                Phone="6056834666",
+            )
+        ],
+    )
+
+    accepted, rejected = build_registry([str(source)])
+    assert accepted.empty
+    assert rejected.iloc[0]["Rejection_Reason"] == "SOURCE_LOCATION_CONFLICT"
+
+
+def test_location_specific_primary_source_matching_city_is_accepted(tmp_path: Path):
+    from scripts.build_verified_business_evidence import build_registry
+
+    source = _write(
+        tmp_path / "gold.csv",
+        [
+            row(
+                "Coffee Cup Fuel Stop",
+                "NOT_NAIL",
+                "https://www.coffeecupfuelstops.com/hartford",
+                "Official site identifies fuel stop/convenience/travel store.",
+                City="Hartford",
+                Street="1001 S Western Ave",
+                ZIP="57033",
+                Phone="6055284622",
+            )
+        ],
+    )
+
+    accepted, rejected = build_registry([str(source)])
+    assert len(accepted) == 1
+    assert rejected.empty
