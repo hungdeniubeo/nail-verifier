@@ -24,7 +24,7 @@ from .osm import OSMVerifier
 from .policy import apply_policy
 from .states.sd import SouthDakotaAdapter
 
-ENGINE_VERSION = "3.3.0"
+ENGINE_VERSION = "3.4.0"
 
 OFFICIAL_ADAPTERS = {
     "SD": SouthDakotaAdapter,
@@ -361,7 +361,7 @@ class VerificationEngine:
             **policy,
             **dimensions,
             **local.to_dict(),
-            "Policy_Profile": "SD_CALIBRATED_V1" if record.state.upper() == "SD" else "REVIEW_ONLY",
+            "Policy_Profile": "SD_KEEP_V1" if record.state.upper() == "SD" else "REVIEW_ONLY",
             "State_Support": state_support,
             "Checked_At": utc_now(),
             "Cache_Hit": "NO",
