@@ -35,6 +35,7 @@ def test_source_tier_mapping_is_conservative():
     assert source_tier_for("https://thenailhaus605.glossgenius.com/about", "Official booking site lists nail services") == "A"
     assert source_tier_for("https://www.acehardware.com/store-details/17989", "Official Ace page identifies hardware store") == "A"
     assert source_tier_for("https://rubyhousekeystone.com/", "Official website confirms restaurant") == "A"
+    assert source_tier_for("https://www.ap10nailbar.com/locations", "Official business locations page lists this salon") == "A"
     assert source_tier_for("https://www.bbb.org/example", "BBB classifies matching business") == "B"
     assert source_tier_for("https://maps.apple.com/place?id=1", "Apple Maps classifies business") == "B"
     assert source_tier_for("https://www.chamberofcommerce.com/example", "Chamber directory") == "B"
