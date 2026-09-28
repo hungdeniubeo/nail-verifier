@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from typing import Dict
 
-# These rules were calibrated on a manually verified South Dakota gold set.
-# They are state-scoped on purpose: do not automatically reuse them in another
-# state until that state's own validation set has been checked.
+# No local heuristic rule is auto-enabled yet.
+# Keep state-scoped validation data separate from production policy until the
+# rule has enough independent labels and survives a statistical confidence
+# check. Official nail-specific state evidence may still auto KEEP.
 VALIDATED_RULES: Dict[str, Dict[str, str]] = {
-    "SD": {
-        "R_NAIL_EXPLICIT_STRONG": "KEEP",
-        "R_NON_NAIL_CATEGORY_STRONG": "REMOVE",
-    },
+    "SD": {},
 }
 
+# Empirical thresholds are reported, but they are NOT sufficient by themselves
+# to enable a rule. benchmark_v3.py also reports a Wilson confidence lower bound.
 MIN_RULE_SAMPLES_KEEP = 20
 MIN_RULE_SAMPLES_REMOVE = 20
 MIN_KEEP_PRECISION = 0.99
 MIN_REMOVE_PRECISION = 0.995
+MIN_WILSON_LOWER_BOUND = 0.95
 
 
 def apply_policy(
