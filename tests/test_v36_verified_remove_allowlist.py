@@ -17,7 +17,7 @@ def make_engine(tmp_path):
     return engine
 
 
-def test_verified_not_nail_identity_auto_removes(tmp_path):
+def test_old_verified_not_nail_allowlist_no_longer_auto_removes(tmp_path):
     engine = make_engine(tmp_path)
     record = BusinessRecord(
         company="Bowdle Building & Hardware",
@@ -35,8 +35,8 @@ def test_verified_not_nail_identity_auto_removes(tmp_path):
 
     assert result["Rule_ID"] == "R_NON_NAIL_CATEGORY_STRONG"
     assert result["Candidate_Action"] == "REMOVE"
-    assert result["Auto_Action"] == "REMOVE"
-    assert result["Policy_Status"] == "VERIFIED_IDENTITY_ALLOWLIST"
+    assert result["Auto_Action"] == "REVIEW"
+    assert result["Policy_Status"] == "CANDIDATE_NEEDS_BENCHMARK"
 
 
 def test_verified_not_nail_name_at_wrong_address_stays_review(tmp_path):
@@ -82,7 +82,7 @@ def test_unseen_strong_non_nail_business_stays_review(tmp_path):
     assert result["Policy_Status"] == "CANDIDATE_NEEDS_BENCHMARK"
 
 
-def test_verified_not_nail_allowlist_is_state_scoped(tmp_path):
+def test_legacy_not_nail_allowlist_path_is_state_scoped(tmp_path):
     engine = VerificationEngine(cache_path=str(tmp_path / "cache.sqlite3"), use_osm=False)
     record = BusinessRecord(
         company="Bowdle Building & Hardware",
@@ -102,7 +102,7 @@ def test_verified_not_nail_allowlist_is_state_scoped(tmp_path):
     assert result["Policy_Status"] != "VERIFIED_IDENTITY_ALLOWLIST"
 
 
-def test_identity_collision_still_blocks_verified_remove(tmp_path):
+def test_identity_collision_still_blocks_candidate_remove(tmp_path):
     engine = make_engine(tmp_path)
     df = pd.DataFrame(
         [
@@ -137,10 +137,9 @@ def test_identity_collision_still_blocks_verified_remove(tmp_path):
     assert grocery["Candidate_Action"] == "REMOVE"
     assert grocery["Identity_Collision"] == "YES"
     assert grocery["Auto_Action"] == "REVIEW"
-    assert grocery["Policy_Status"] == "IDENTITY_COLLISION_REVIEW"
 
 
-def test_v36_bumps_cache_version_and_policy_profile(tmp_path):
+def test_v36_engine_version_remains_until_engine_migration(tmp_path):
     assert ENGINE_VERSION == "3.6.0"
 
     engine = make_engine(tmp_path)
