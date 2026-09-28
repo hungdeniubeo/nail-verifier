@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+from pathlib import Path
+from urllib.parse import urlparse
+from typing import Iterable, Tuple
+
+import pandas as pd
+
+DEFAULT_INPUTS = [
+    "benchmarks/sd_rule_calibration_v33.csv",
+    "benchmarks/sd_rule_calibration_v34_addendum.csv",
+    "benchmarks/sd_address_strong_v35.csv",
+]
+OUTPUT = "benchmarks/verified_business_evidence.csv"
+REJECTIONS = "benchmarks/evidence_migration_rejections.csv"
+
+TIER_A_HOSTS = {
+    "acehardware.com", "dollargeneral.com", "truevalue.com", "coffeecupfuelstops.com",
+    "rubyhousekeystone.com", "buildingcentersd.com", "silveradofranklin.com",
+    "nailworldsd.com", "glamournailsspasd.com", "nailsbyjennytd.com",
+    "tnailspasiouxfalls.com", "royalnail-spa.com", "skynailspasiouxfalls.com",
+    "qdnailandspa.com", "ap10nailbar.com",
+}
+TIER_B_HOSTS = {"bbb.org", "maps.apple.com", "chamberofcommerce.com", "local.mitchellrepublic.com", "bowdlesd.com", "dnb.com"}
+TIER_C_HOSTS = {"bestprosintown.com", "loc8nearme.com", "birdeye.com", "yellowpages.com", "verview.com", "nailsalondirectories.com", "localnailsalons.net", "local.yahoo.com", "restaurantguru.com", "waze.com", "locally.com", "nailartai.app", "baonail.com", "salonlookup.com", "usbeautyaward.com"}
+
+
+def _host(url: str) -> str:
+    host = (urlparse(str(url)).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def source_tier(url: str, notes: str = "") -> str:
+    host = _host(url)
+    text = str(notes).lower()
+    if host.endswith("glossgenius.com") or host.endswith("booksy.com"):
+        return "A" if any(term in text for term in ("official", "booking", "service")) else "C"
+    if host in TIER_A_HOSTS or any(host.endswith("." + h) for h in TIER_A_HOSTS):
+        return "A"
+    if host in TIER_B_HOSTS or any(host.endswith("." + h) for h in TIER_B_HOSTS):
+        return "B"
+    if host in TIER_C_HOSTS or any(host.endswith("." + h) for h in TIER_C_HOSTS):
+        return "C"
+    return "C"
+
+
+def _source_name(url: str) -> str:
+    host = _host(url)
+    return host or "CALIBRATION_SOURCE"
+
+
+def _category(expected: str, company: str, notes: str) -> str:
+    if expected == "NAIL":
+        return "Nail Salon"
+    text = f"{company} {notes}".lower()
+    for label, terms in [
+        ("Hardware Store", ("hardware", "building center", "lumberyard", "true value", "ace")),
+        ("General Retail", ("dollar general", "discount store", "general retail")),
+        ("Grocery Store", ("grocery", "supermarket", "hy-vee")),
+        ("Restaurant", ("restaurant", "steakhouse", "buffet")),
+        ("Fuel Stop", ("fuel stop", "convenience", "travel store")),
+        ("Hotel/Gaming", ("hotel", "gaming")),
+    ]:
+        if any(term in text for term in terms):
+            return label
+    return "Clearly Non-Beauty Business"
+
+
+def build_registry(input_paths: Iterable[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    accepted = []
+    rejected = []
+    for path_value in input_paths:
+        path = Path(path_value)
+        df = pd.read_csv(path, dtype=str, keep_default_na=False)
+        for _, row in df.iterrows():
+            expected = str(row.get("Expected", "")).strip().upper()
+            url = str(row.get("Gold_Source_URL", "")).strip()
+            notes = str(row.get("Gold_Notes", "")).strip()
+            if expected not in {"NAIL", "NOT_NAIL"} or not url:
+                rejected.append({
+                    "State": row.get("State", ""), "Company": row.get("Company", ""),
+                    "Street": row.get("Street", ""), "City": row.get("City", ""),
+                    "ZIP": row.get("ZIP", ""), "Phone": row.get("Phone", ""),
+                    "Reason": "UNKNOWN label or missing business-specific source URL",
+                    "Source_File": path.name,
+                })
+                continue
+            tier = source_tier(url, notes)
+            accepted.append({
+                "State": row.get("State", ""),
+                "Company": row.get("Company", ""),
+                "Street": row.get("Street", ""),
+                "City": row.get("City", ""),
+                "ZIP": row.get("ZIP", ""),
+                "Phone": row.get("Phone", ""),
+                "Source_Name": _source_name(url),
+                "Source_Tier": tier,
+                "Source_URL": url,
+                "Observed_Category": _category(expected, str(row.get("Company", "")), notes),
+                "Nail_Service_Evidence": notes if expected == "NAIL" else "",
+                "Business_Status_Evidence": row.get("Status", ""),
+                "Evidence_Direction": expected,
+                "Evidence_Notes": notes,
+                "Checked_At": "2026-09-28",
+            })
+    accepted_df = pd.DataFrame(accepted)
+    rejected_df = pd.DataFrame(rejected)
+    if not accepted_df.empty:
+        accepted_df = accepted_df.drop_duplicates(subset=["State", "Company", "Street", "City", "ZIP", "Phone", "Source_URL", "Evidence_Direction"])
+        accepted_df = accepted_df.sort_values(["State", "Company", "Source_URL"], kind="stable").reset_index(drop=True)
+    if not rejected_df.empty:
+        rejected_df = rejected_df.sort_values(["State", "Company", "Source_File"], kind="stable").reset_index(drop=True)
+    return accepted_df, rejected_df
+
+
+def main() -> None:
+    accepted, rejected = build_registry(DEFAULT_INPUTS)
+    Path(OUTPUT).parent.mkdir(parents=True, exist_ok=True)
+    accepted.to_csv(OUTPUT, index=False)
+    rejected.to_csv(REJECTIONS, index=False)
+    print(f"accepted={len(accepted)} rejected={len(rejected)}")
+
+
+if __name__ == "__main__":
+    main()

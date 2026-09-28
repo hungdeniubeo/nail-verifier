@@ -1,0 +1,3 @@
+State,Company,Street,City,ZIP,Phone,Reason,Source_File
+SD,K & E Nail Studio LLC,522 7th St Suite 221,Rapid City,57701,,UNKNOWN label or missing business-specific source URL,sd_address_strong_v35.csv
+SD,Nailday by Nee,5201 S Solberg Ave suite 224,Sioux Falls,57108,6055306580,UNKNOWN label or missing business-specific source URL,sd_rule_calibration_v33.csv

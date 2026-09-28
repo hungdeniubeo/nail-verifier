@@ -8,6 +8,9 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 
 from .cache import CacheDB
+from .consensus import resolve_consensus
+from .evidence_classifier import classify_live_evidence, classify_registry_evidence, heuristic_signal
+from .evidence_registry import EvidenceRegistry
 from .features import LocalAssessment, assess_local
 from .http import CachedHttpClient
 from .models import BusinessRecord, Evidence
@@ -22,10 +25,10 @@ from .normalize import (
     validate_mapping,
 )
 from .osm import OSMVerifier
-from .policy import apply_policy, apply_verified_identity_policy
+from .policy import apply_evidence_policy
 from .states.sd import SouthDakotaAdapter
 
-ENGINE_VERSION = "3.6.0"
+ENGINE_VERSION = "3.7.0"
 
 OFFICIAL_ADAPTERS = {
     "SD": SouthDakotaAdapter,
@@ -165,6 +168,10 @@ def decide(
     state_support: str,
     local: LocalAssessment,
 ) -> Dict[str, Any]:
+    """Legacy decision fields retained for audit and calibration.
+
+    In v3.7 these fields no longer authorize Auto_Action. Consensus does.
+    """
     official = next((e for e in evidence if e.strength == "STRONG_OFFICIAL"), None)
     osm_nail = next((e for e in evidence if e.strength == "STRONG_INDEPENDENT_NAIL"), None)
     osm_beauty = next((e for e in evidence if e.strength == "STRONG_INDEPENDENT_BEAUTY"), None)
@@ -175,7 +182,7 @@ def decide(
             "Decision": "CLOSED_PERMANENTLY",
             "Confidence": local.score,
             "Candidate_Action": "REMOVE",
-            "Reason": "NailMap marks the business permanently closed. Removal stays benchmark-gated.",
+            "Reason": "NailMap marks the business permanently closed. Removal requires independent evidence.",
             "Evidence_Tier": "SOURCE_STATUS",
         }
 
@@ -193,7 +200,7 @@ def decide(
             "Decision": "VERIFIED_NAIL",
             "Confidence": 99,
             "Candidate_Action": "KEEP",
-            "Reason": "Strict identity/location match to a current official state license whose license type is nail-specific.",
+            "Reason": "Strict identity/location match to a current official state nail-specific license.",
             "Evidence_Tier": "OFFICIAL_STATE",
         }
 
@@ -228,7 +235,7 @@ def decide(
             "Decision": "LIKELY_NAIL",
             "Confidence": 92,
             "Candidate_Action": "KEEP",
-            "Reason": "Independent identity/location match indicates nail services; policy decides whether auto action is permitted.",
+            "Reason": "Independent identity/location match indicates nail services; evidence policy decides automatic action.",
             "Evidence_Tier": "INDEPENDENT_OSM",
         }
 
@@ -246,7 +253,7 @@ def decide(
             "Decision": "LIKELY_NAIL",
             "Confidence": local.score,
             "Candidate_Action": "KEEP",
-            "Reason": "Explicit nail-service name plus operational structured listing. Policy decides whether this calibrated rule may auto KEEP.",
+            "Reason": "Explicit nail-service name plus structured listing; this is a heuristic candidate, not individual verification.",
             "Evidence_Tier": "NAILMAP_STRUCTURED",
         }
 
@@ -255,7 +262,7 @@ def decide(
             "Decision": "LIKELY_NAIL",
             "Confidence": local.score,
             "Candidate_Action": "REVIEW",
-            "Reason": "Business name indicates or hints at nail service, but identity/evidence is not strong enough for automatic action.",
+            "Reason": "Business name indicates or hints at nail service, but evidence is not strong enough for automatic action.",
             "Evidence_Tier": "NAILMAP_NAME_ONLY",
         }
 
@@ -264,7 +271,7 @@ def decide(
             "Decision": "LIKELY_NOT_NAIL",
             "Confidence": local.score,
             "Candidate_Action": "REMOVE",
-            "Reason": "Business name is a high-precision non-beauty category and the listing has structured identity data. Policy decides whether this calibrated rule may auto REMOVE.",
+            "Reason": "Business name indicates a non-beauty category; removal still requires business-specific verification.",
             "Evidence_Tier": "NAILMAP_STRUCTURED",
         }
 
@@ -273,7 +280,7 @@ def decide(
             "Decision": "LIKELY_NOT_NAIL",
             "Confidence": local.score,
             "Candidate_Action": "REVIEW",
-            "Reason": "Business name strongly suggests a non-beauty category, but identity data is incomplete.",
+            "Reason": "Business name suggests a non-beauty category, but identity data is incomplete.",
             "Evidence_Tier": "NAILMAP_NAME_ONLY",
         }
 
@@ -282,13 +289,13 @@ def decide(
             "Decision": "UNSUPPORTED_STATE_REVIEW",
             "Confidence": local.score,
             "Candidate_Action": "REVIEW",
-            "Reason": "No official verifier adapter is installed for this state and no state-calibrated policy may auto-act.",
+            "Reason": "No official verifier adapter is installed for this state.",
             "Evidence_Tier": "LOCAL_ONLY",
         }
 
     reason = "Insufficient evidence for a precision-first nail-service decision."
     if source_errors:
-        reason += " One or more verification sources returned an error; row was not auto-classified."
+        reason += " One or more verification sources returned an error."
     return {
         "Decision": "REVIEW",
         "Confidence": 20 if source_errors else max(30, local.score),
@@ -299,11 +306,17 @@ def decide(
 
 
 class VerificationEngine:
-    def __init__(self, cache_path: str = ".cache/nail_verifier_v3.sqlite3", use_osm: bool = True):
+    def __init__(
+        self,
+        cache_path: str = ".cache/nail_verifier_v3.sqlite3",
+        use_osm: bool = True,
+        registry_path: str = "benchmarks/verified_business_evidence.csv",
+    ):
         self.cache = CacheDB(cache_path)
         self.http = CachedHttpClient(self.cache)
         self.use_osm = use_osm
         self.osm = OSMVerifier(self.http) if use_osm else None
+        self.registry = EvidenceRegistry(registry_path)
         self._adapters: Dict[str, Any] = {}
 
     def _adapter(self, state: str) -> Optional[Any]:
@@ -315,8 +328,12 @@ class VerificationEngine:
             self._adapters[state] = cls(self.http)
         return self._adapters[state]
 
+    def _cache_version(self) -> str:
+        mode = "+osm" if self.use_osm else "+noosm"
+        return f"{ENGINE_VERSION}+registry:{self.registry.version}{mode}"
+
     def verify_record(self, record: BusinessRecord, force_refresh: bool = False) -> Dict[str, Any]:
-        config_version = ENGINE_VERSION + ("+osm" if self.use_osm else "+noosm")
+        config_version = self._cache_version()
         key = record_identity(record)
         if not force_refresh:
             cached = self.cache.get_verification(key, config_version)
@@ -347,37 +364,40 @@ class VerificationEngine:
                 source_errors.append("OPENSTREETMAP: %s" % exc)
 
         decision = decide(record, evidence, source_errors, state_support, local)
-        policy = apply_policy(
-            record.state,
-            decision["Decision"],
-            decision["Evidence_Tier"],
-            local.rule_id,
-            decision["Candidate_Action"],
-            allow_validated_rules=True,
-        )
-        if policy.get("Policy_Status") == "CANDIDATE_NEEDS_BENCHMARK":
-            exact_policy = apply_verified_identity_policy(
-                record,
-                local.rule_id,
-                decision["Candidate_Action"],
-            )
-            if exact_policy:
-                policy = exact_policy
+        registry_rows = self.registry.match(record)
+        signals = classify_registry_evidence(registry_rows) + classify_live_evidence(evidence)
+        hint = heuristic_signal(local, record)
+        if hint:
+            signals.append(hint)
+        consensus = resolve_consensus(signals)
+        consensus_fields = consensus.to_dict()
+        policy = apply_evidence_policy(str(consensus_fields["Verification_Status"]))
 
-        dimensions = derive_dimensions(record, evidence, decision)
+        # A failed live source never unlocks an action. Existing stored evidence
+        # remains visible, but this run must be reviewed before production use.
+        if source_errors and policy["Auto_Action"] in {"KEEP", "REMOVE"}:
+            policy = {"Auto_Action": "REVIEW", "Policy_Status": "SOURCE_ERROR_REVIEW"}
 
+        legacy_dimensions = derive_dimensions(record, evidence, decision)
         result: Dict[str, Any] = {
             **decision,
             **policy,
-            **dimensions,
+            **legacy_dimensions,
             **local.to_dict(),
-            "Policy_Profile": "SD_EXACT_KEEP_REMOVE_V1_COLLISION_GUARD" if record.state.upper() == "SD" else "REVIEW_ONLY",
+            **consensus_fields,
+            "Policy_Profile": "EVIDENCE_FIRST_V1_COLLISION_GUARD",
             "State_Support": state_support,
             "Checked_At": utc_now(),
             "Cache_Hit": "NO",
             "Source_Errors": " | ".join(source_errors),
+            "Registry_Evidence_Count": len(registry_rows),
             **_flatten_evidence(evidence),
         }
+
+        # Evidence-level dimensions are authoritative in v3.7. Keep old columns
+        # but align them with consensus so users do not confuse legacy Decision.
+        result["Business_Exists"] = consensus_fields["Existence_Status"]
+        result["Nail_Service"] = consensus_fields["Nail_Service_Status"]
 
         if not source_errors:
             self.cache.set_verification(key, config_version, result)
@@ -422,7 +442,6 @@ def _identity_collisions(records: List[BusinessRecord]) -> Dict[int, Dict[str, A
     for indexes in buckets.values():
         if len(indexes) < 2:
             continue
-
         normalized_names = {
             normalize_text(records[index].company)
             for index in indexes
@@ -430,7 +449,6 @@ def _identity_collisions(records: List[BusinessRecord]) -> Dict[int, Dict[str, A
         }
         if len(normalized_names) < 2:
             continue
-
         names = sorted({records[index].company for index in indexes})
         display_names = " | ".join(names)
         for index in indexes:
@@ -451,6 +469,25 @@ def _normalized_identity(record: BusinessRecord) -> Dict[str, str]:
     }
 
 
+def _empty_consensus_fields() -> Dict[str, Any]:
+    return {
+        "Verification_Status": "UNKNOWN",
+        "Identity_Status": "UNVERIFIED",
+        "Existence_Status": "UNKNOWN",
+        "Nail_Service_Status": "UNKNOWN",
+        "Evidence_Source_Count": 0,
+        "Strong_Evidence_Count": 0,
+        "Evidence_Agrees": "NO",
+        "Evidence_Conflicts": 0,
+        "Primary_Source": "",
+        "Primary_Source_Tier": "",
+        "Primary_Source_URL": "",
+        "Verification_Evidence": "",
+        "Verification_Reason": "Verification failed before consensus could be completed.",
+        "Verified_At": "",
+    }
+
+
 def verify_dataframe(
     df: pd.DataFrame,
     limit: Optional[int] = None,
@@ -459,11 +496,12 @@ def verify_dataframe(
     force_refresh: bool = False,
     cache_path: str = ".cache/nail_verifier_v3.sqlite3",
     engine: Optional[VerificationEngine] = None,
+    registry_path: str = "benchmarks/verified_business_evidence.csv",
 ) -> pd.DataFrame:
     mapping = detect_columns(df.columns)
     validate_mapping(mapping)
     work = df.head(limit).copy() if limit else df.copy()
-    verifier = engine or VerificationEngine(cache_path=cache_path, use_osm=use_osm)
+    verifier = engine or VerificationEngine(cache_path=cache_path, use_osm=use_osm, registry_path=registry_path)
 
     records = [row_to_record(row, mapping) for _, row in work.iterrows()]
     identity_counts = Counter(record_identity(record) for record in records)
@@ -484,7 +522,7 @@ def verify_dataframe(
                 "Candidate_Action": "REVIEW",
                 "Auto_Action": "REVIEW",
                 "Policy_Status": "SOURCE_ERROR",
-                "Policy_Profile": "ERROR",
+                "Policy_Profile": "EVIDENCE_FIRST_V1_COLLISION_GUARD",
                 "Reason": str(exc),
                 "Evidence_Tier": "ERROR",
                 **local.to_dict(),
@@ -494,6 +532,7 @@ def verify_dataframe(
                 "Checked_At": utc_now(),
                 "Cache_Hit": "NO",
                 "Source_Errors": str(exc),
+                **_empty_consensus_fields(),
             }
 
         result.update(_normalized_identity(record))
@@ -506,19 +545,19 @@ def verify_dataframe(
             if result.get("Auto_Action") in {"KEEP", "REMOVE"}:
                 result["Auto_Action"] = "REVIEW"
                 result["Policy_Status"] = "IDENTITY_COLLISION_REVIEW"
-                prior_reason = str(result.get("Reason", "")).strip()
+                prior_reason = str(result.get("Verification_Reason") or result.get("Reason", "")).strip()
                 collision_reason = (
                     "Same normalized phone and base address appear under multiple business names; "
                     "automatic action is blocked pending identity review."
                 )
-                result["Reason"] = (prior_reason + " " + collision_reason).strip()
+                result["Verification_Reason"] = (prior_reason + " " + collision_reason).strip()
+                result["Reason"] = (str(result.get("Reason", "")).strip() + " " + collision_reason).strip()
         else:
             result["Identity_Collision"] = "NO"
             result["Collision_Group_Size"] = 1
             result["Collision_Names"] = ""
 
         rows.append(result)
-
         if progress:
             progress(pos, total, record.company)
 

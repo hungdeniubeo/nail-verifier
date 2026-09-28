@@ -6,198 +6,249 @@ Precision-first verifier for NailMap CSV data.
 
 The primary goal is to find NailMap rows that are **not actually nail salons** so they can be removed safely.
 
-The system therefore prefers:
+V3.7 no longer treats a business name, NailMap category, review count, or a calibrated rule as proof. Those signals only prioritize research. A business is `VERIFIED_*` only when business-specific evidence matches the same real-world identity and passes the source-consensus gate.
 
 ```text
-uncertain -> REVIEW
-verified nail -> KEEP
-exact independently verified NOT_NAIL -> REMOVE
+VERIFIED_NAIL       -> eligible KEEP
+VERIFIED_NOT_NAIL   -> eligible REMOVE
+LIKELY / UNKNOWN    -> REVIEW
+CONFLICTING         -> REVIEW
+identity collision  -> REVIEW
 ```
 
-over aggressive filtering that could delete a real nail business.
+## Current version: Precision v3.7 Multi-Source Verification
 
-## Current version: Precision v3.6 NOT-NAIL Candidate
+V3.7 introduces a seven-stage evidence-first pipeline:
 
-V3.6 keeps the existing South Dakota KEEP safeguards and adds an exact verified NOT_NAIL removal path:
+1. normalize business identity;
+2. match evidence to the exact business;
+3. assess existence/status;
+4. classify business category;
+5. verify nail-service evidence;
+6. combine independent sources and detect conflicts;
+7. apply action policy, then run dataset-level collision guards.
 
-- South Dakota `R_NAIL_EXPLICIT_STRONG` may Auto KEEP after calibration.
-- Seven independently verified address-strong nail identities may Auto KEEP through an exact identity allowlist.
-- All 35 current South Dakota `R_NON_NAIL_CATEGORY_STRONG` identities were independently checked as NOT_NAIL across the existing calibration files.
-- Those 35 identities may Auto REMOVE only when **exact normalized name + full street + city + ZIP + phone** match the verified allowlist.
-- The generic `R_NON_NAIL_CATEGORY_STRONG` rule is still REVIEW-only for unseen businesses.
-- Identity-collision guard can override any Auto KEEP/REMOVE back to REVIEW.
-- Other states do not inherit South Dakota exact allowlists or calibrated rules.
-- Public Nominatim is disabled for bulk runs.
-
-This design deliberately separates **verified identities** from **generic rules**. A future business named `Ace Hardware`, `Dollar General`, `Restaurant`, etc. does not become Auto REMOVE merely because its name matches a non-nail category.
-
-## Verified NOT_NAIL removal in V3.6
-
-The current 534-row South Dakota cohort contains 35 `R_NON_NAIL_CATEGORY_STRONG` businesses. Their exact identities were independently checked using public/official evidence in:
-
-- `benchmarks/sd_rule_calibration_v33.csv`
-- `benchmarks/sd_rule_calibration_v34_addendum.csv`
-
-The cohort includes hardware/building stores, general retail, grocery, restaurants/steakhouse, fuel stops and a hotel/gaming/restaurant complex. Examples include Bowdle Building & Hardware, Ace Hardware locations, Dollar General locations, Hy-Vee Grocery Store, Ruby House Restaurant and Coffee Cup Fuel Stop.
-
-V3.6 matches REMOVE identities using:
+The old v3.6 exact identity allowlists have been removed from `policy.py`. Business-specific truth now lives in the evidence registry:
 
 ```text
-state scope
-+ normalized company name
-+ full normalized street
+benchmarks/verified_business_evidence.csv
+```
+
+The registry is auditable: each evidence row keeps the business identity, source, source tier, source URL, category/service evidence, direction, notes, and checked date.
+
+## Verification states
+
+- `VERIFIED_NAIL`
+- `VERIFIED_NOT_NAIL`
+- `LIKELY_NAIL`
+- `LIKELY_NOT_NAIL`
+- `CONFLICTING_EVIDENCE`
+- `UNKNOWN`
+
+These are separate from legacy `Decision` / `Candidate_Action` fields. Legacy fields stay in the CSV for debugging and research prioritization, but **they do not authorize Auto_Action in v3.7**.
+
+## Source tiers
+
+### Tier A — primary / official
+
+Examples:
+
+- official state/license registry;
+- official business website;
+- official booking/service page;
+- official chain/store locator.
+
+One exact Tier A directional source may be enough for `VERIFIED_NAIL` or `VERIFIED_NOT_NAIL` when it affirmatively proves the relevant category/service and there is no strong conflict.
+
+### Tier B — established independent source
+
+Examples:
+
+- BBB;
+- Chamber of Commerce;
+- Apple Maps;
+- established local newspaper/business directory.
+
+### Tier C — secondary directory
+
+Examples:
+
+- BestProsInTown;
+- Loc8NearMe;
+- Birdeye;
+- YellowPages;
+- specialized salon directories.
+
+A single Tier B or C source produces at most `LIKELY_*`. At least two independent agreeing B/C sources are required to reach VERIFIED.
+
+### Tier D — heuristic only
+
+Examples:
+
+- NailMap business name;
+- rating/review count;
+- NailMap operational status;
+- local name/category rules.
+
+Tier D never creates VERIFIED status by itself.
+
+## Critical NOT_NAIL rule
+
+`VERIFIED_NOT_NAIL` requires business-specific identity evidence and affirmative evidence that the exact business is a clearly different category, such as hardware, retail, grocery, restaurant, fuel stop, hotel/gaming, etc.
+
+A hair salon, spa, day spa, beauty salon, or aesthetics business is **not** considered NOT_NAIL merely because one page does not mention nails. Absence of nail evidence is not evidence of absence.
+
+## Consensus gate
+
+A result can become VERIFIED when either:
+
+```text
+1 exact Tier A directional source
+```
+
+or:
+
+```text
+2+ independent Tier B/C directional sources that agree
+```
+
+Strong NAIL and NOT_NAIL evidence for the same identity produces:
+
+```text
+Verification_Status = CONFLICTING_EVIDENCE
+Auto_Action = REVIEW
+```
+
+Duplicate evidence rows from the same provider/domain do not count as independent sources.
+
+## Identity matching
+
+Stored registry evidence must match:
+
+```text
+state
++ normalized company
++ full normalized street including suite/unit
 + normalized city
 + ZIP
-+ normalized phone
 ```
 
-If any of those identity fields do not match, the row remains REVIEW.
+Phone handling is conservative:
 
-Verified rows use:
+- if both evidence and NailMap expose a phone, the normalized phones must agree;
+- if one side lacks phone, exact name/location identity may still match;
+- two non-empty conflicting phones reject the registry evidence.
 
-```text
-Auto_Action = REMOVE
-Policy_Status = VERIFIED_IDENTITY_ALLOWLIST
-```
+Dataset collision detection remains separate and uses same phone + same base street + city/state/ZIP with multiple business names. A collision can block any otherwise valid KEEP/REMOVE.
 
-### Why the generic REMOVE rule is still disabled
-
-The full checked cohort was 35/35 NOT_NAIL, but that sample is still too small to justify treating every future business matching the rule as safe to remove. The Wilson 95% lower bound for 35/35 is only about 90.11%, below the production gate.
-
-Therefore V3.6 does **not** add `R_NON_NAIL_CATEGORY_STRONG` to `VALIDATED_RULES`. Only already-verified exact identities may Auto REMOVE.
-
-## Expected behavior on the current 534-row SD dataset
-
-The previous v3.5 file contains 35 strong NOT_NAIL candidates. One of them, `Hy-Vee Grocery Store`, shares normalized phone/base address with another business identity (`Hy-Vee Pickup`), so the collision guard is expected to block that exact removal.
-
-Therefore a fresh v3.6 run is expected to produce approximately:
-
-```text
-124 Auto KEEP
-34 Auto REMOVE
-1 verified strong NOT_NAIL candidate blocked by collision -> REVIEW
-remaining rows -> REVIEW
-```
-
-This is an expected result based on the v3.5 dataset, not a substitute for running v3.6 and checking the output.
-
-## Existing KEEP calibration
-
-### Calibrated strong KEEP rule
-
-Across the base calibration plus the v3.4 addendum:
-
-- 74 labeled `R_NAIL_EXPLICIT_STRONG` cases were independently checked;
-- 74/74 matched real nail-service businesses;
-- empirical precision on that checked sample = 100%;
-- Wilson 95% lower bound is about 95.06%.
-
-This supports the South Dakota production candidate. It is not a guarantee of 100% real-world accuracy.
-
-### Exact address-strong KEEP allowlist
-
-The complete current South Dakota address-strong cohort contained eight businesses. Independent calibration produced 7 NAIL and 1 UNKNOWN (`K & E Nail Studio LLC`). Seven observations are too few to enable the generic rule, so only the seven verified exact identities may Auto KEEP.
-
-Calibration evidence is stored in:
-
-```text
-benchmarks/sd_address_strong_v35.csv
-```
-
-`K & E Nail Studio LLC` remains REVIEW.
-
-## Identity-collision guard
-
-A row is marked `Identity_Collision = YES` when:
-
-- normalized phone is the same;
-- normalized base street address is the same (suite/unit ignored for collision grouping);
-- city/state/ZIP agree;
-- more than one distinct normalized company name appears in that group.
-
-When a collision row would otherwise be Auto KEEP or Auto REMOVE:
-
-```text
-Auto_Action = REVIEW
-Policy_Status = IDENTITY_COLLISION_REVIEW
-```
-
-The original candidate action and rule remain visible for audit. This guard runs after exact allowlists and calibrated-rule policy.
-
-## Other safety guards
-
-Names such as these never qualify for the strong nail Auto KEEP rule:
-
-- Nail Supply
-- Nail Wholesale
-- Nail Academy
-- Nail School
-- Nail Products
-- Nail Equipment
-- Nail Distributor
-
-They are routed to `R_NAIL_NON_SERVICE_CONFLICT` and remain REVIEW.
-
-## South Dakota policy
+## Production action policy
 
 ### Auto KEEP
 
-1. `R_NAIL_EXPLICIT_STRONG` when the calibrated state rule applies and no collision blocks it.
-2. Exact independently verified address-strong nail identities.
-3. Nail-specific current official-state evidence, when available.
+Only:
+
+```text
+Verification_Status = VERIFIED_NAIL
+```
+
+and no collision/source safety guard blocks the action.
 
 ### Auto REMOVE
 
-Only exact independently verified v3.6 NOT_NAIL identities from the current SD calibration cohort, with exact normalized identity match and no collision guard block.
+Only:
 
-### Still REVIEW
+```text
+Verification_Status = VERIFIED_NOT_NAIL
+```
 
-- any unseen `R_NON_NAIL_CATEGORY_STRONG` business not in the exact verified allowlist;
-- `R_NON_NAIL_CATEGORY_ADDRESS_STRONG`;
-- generic `R_NAIL_EXPLICIT_ADDRESS_STRONG` rows not in the exact KEEP allowlist;
-- `K & E Nail Studio LLC` until independently verified;
-- `R_NAIL_EXPLICIT_WEAK`;
-- `R_NAIL_STYLING_HINT`;
-- `R_BEAUTY_AMBIGUOUS`;
-- `R_UNKNOWN`;
-- permanently/temporarily closed local-source rules unless independently handled by stronger evidence;
-- any identity-collision row that would otherwise auto-act.
+and no collision/source safety guard blocks the action.
 
-## Next target: beauty / hair / spa ambiguity
+### REVIEW
 
-After the exact NOT_NAIL cohort is confirmed in a v3.6 full run, the next focus is `R_BEAUTY_AMBIGUOUS`. Hair salons, spas and beauty businesses cannot be removed just because their name lacks the word `nail`: many multi-service salons offer nail services. Those rows require independent service/category evidence before any NOT_NAIL conclusion.
+Everything else, including:
 
-## Main output fields
+- `LIKELY_NAIL`;
+- `LIKELY_NOT_NAIL`;
+- `UNKNOWN`;
+- `CONFLICTING_EVIDENCE`;
+- a single Tier B/C source;
+- rule-only nail/non-nail guesses;
+- unresolved beauty/hair/spa businesses;
+- identity collisions;
+- source-error runs that would otherwise auto-act.
 
-- `Decision`
-- `Candidate_Action`
+## Output audit fields
+
+Important v3.7 columns include:
+
+- `Verification_Status`
+- `Identity_Status`
+- `Existence_Status`
+- `Nail_Service_Status`
+- `Evidence_Source_Count`
+- `Strong_Evidence_Count`
+- `Evidence_Agrees`
+- `Evidence_Conflicts`
+- `Primary_Source`
+- `Primary_Source_Tier`
+- `Primary_Source_URL`
+- `Verification_Evidence`
+- `Verification_Reason`
+- `Verified_At`
 - `Auto_Action`
 - `Policy_Status`
-- `Policy_Profile`
-- `Rule_ID`
-- `Business_Exists`
-- `Nail_Service`
 - `Identity_Collision`
-- `Collision_Group_Size`
-- `Collision_Names`
-- `Normalized_Street`
-- `Normalized_City`
-- `Normalized_ZIP`
-- `Normalized_Phone`
-- `Risk_Flags`
-- `Shared_Address_Count`
-- `Exact_Record_Duplicate_Count`
-- official-source evidence columns
-- `Reason`
-- `Source_Errors`
+- normalized identity fields
+- legacy rule/candidate fields for audit
 
-## Calibration files
+Before the Streamlit app exposes the production CSV download, `audit_verification_output()` checks that:
+
+- every Auto REMOVE is `VERIFIED_NOT_NAIL`;
+- every Auto KEEP is `VERIFIED_NAIL`;
+- no collision row still auto-acts;
+- every VERIFIED row has at least one evidence source;
+- every VERIFIED row has a primary source URL.
+
+If any invariant fails, production download is blocked.
+
+## Evidence migration
+
+Existing researched calibration rows can be migrated with:
+
+```bash
+python scripts/build_verified_business_evidence.py
+```
+
+Inputs:
 
 - `benchmarks/sd_rule_calibration_v33.csv`
 - `benchmarks/sd_rule_calibration_v34_addendum.csv`
 - `benchmarks/sd_address_strong_v35.csv`
 
-`UNKNOWN` labels are excluded from precision calculations and never treated as positive evidence.
+Outputs:
+
+- `benchmarks/verified_business_evidence.csv`
+- `benchmarks/evidence_migration_rejections.csv`
+
+`UNKNOWN` or missing-source rows are rejected rather than silently treated as evidence.
+
+## Cache safety
+
+The engine version is `3.7.0`.
+
+The verification cache key includes the SHA-256 digest of the evidence registry. Editing the registry therefore invalidates old verification results automatically; a v3.6 or older cached action cannot silently survive a registry change.
+
+## Research workflow
+
+After each bulk run, the validation/research sample prioritizes unresolved rows instead of already verified rows, especially:
+
+1. `CONFLICTING_EVIDENCE`;
+2. `R_BEAUTY_AMBIGUOUS`;
+3. `UNKNOWN`;
+4. `LIKELY_NAIL` / `LIKELY_NOT_NAIL`;
+5. weak/name-only cases.
+
+This is the path for improving South Dakota coverage without weakening precision.
 
 ## Run on macOS
 
@@ -213,25 +264,27 @@ Open:
 http://localhost:8501
 ```
 
-You should see:
+Expected title:
 
 ```text
-Nail Verifier — Precision v3.6 NOT-NAIL Candidate
+Nail Verifier — Precision v3.7 Multi-Source Verification
 ```
 
 For the 534-row South Dakota dataset choose:
 
 ```text
-Chạy toàn bộ CSV — SD production candidate
+Chạy toàn bộ CSV — evidence-first production candidate
 ```
 
-Bulk mode automatically disables public Nominatim.
+Bulk mode disables public Nominatim.
 
 Download result:
 
 ```text
-*-precision-v36.csv
+*-precision-v37.csv
 ```
+
+No final 534-row KEEP/REMOVE count is hard-coded in this README. V3.7 intentionally downgrades old rule-only or single-secondary-source actions, so production counts must come from a fresh v3.7 run.
 
 ## Tests
 
@@ -239,25 +292,8 @@ Download result:
 python -m pytest -q
 ```
 
-Regression coverage includes:
-
-- Audra must not false-match Revive;
-- nail-specific official license is safe KEEP;
-- Nail Supply / Nail Academy conflicts never qualify for Auto KEEP;
-- SD strong nail rule may Auto KEEP;
-- exact verified address-strong nail identity may Auto KEEP;
-- `K & E Nail Studio LLC` remains REVIEW;
-- exact verified NOT_NAIL identity may Auto REMOVE;
-- same verified NOT_NAIL name at a wrong address remains REVIEW;
-- unseen strong non-nail business remains REVIEW;
-- exact allowlists do not leak outside South Dakota;
-- same phone + same base address + different names blocks both KEEP and REMOVE auto-actions;
-- v3.6 uses a new engine/cache version and policy profile.
-
-## Phase 1 exporter
-
-`export_visible_table.js` exports the NailMap virtual table, deduplicates records and checks exported row count against NailMap's expected total before accepting the CSV.
+Regression coverage includes exact registry matching, phone conflict handling, source-tier classification, independent-source consensus, conflict handling, evidence-only action policy, cache invalidation, collision overrides, shifted-address recovery, unresolved sampling, and output safety auditing.
 
 ---
 
-No public-data verifier can guarantee 100% accuracy. V3.6 deliberately prioritizes precision over coverage and only removes exact identities already supported by independent NOT_NAIL evidence.
+No public-data verifier can guarantee 100% real-world accuracy. This project deliberately trades coverage for precision: unsupported conclusions stay REVIEW until stronger business-specific evidence is available.
