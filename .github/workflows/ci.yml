@@ -15,4 +15,11 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
+      - run: python scripts/build_verified_business_evidence.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v37-evidence-registry
+          path: |
+            benchmarks/verified_business_evidence.csv
+            benchmarks/evidence_migration_rejections.csv
       - run: python -m pytest -q
