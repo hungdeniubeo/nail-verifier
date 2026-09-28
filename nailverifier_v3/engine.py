@@ -13,7 +13,6 @@ from .http import CachedHttpClient
 from .models import BusinessRecord, Evidence
 from .normalize import (
     detect_columns,
-    has_nail_words,
     normalize_street,
     normalize_text,
     normalize_zip,
@@ -25,7 +24,7 @@ from .osm import OSMVerifier
 from .policy import apply_policy
 from .states.sd import SouthDakotaAdapter
 
-ENGINE_VERSION = "3.2.0"
+ENGINE_VERSION = "3.3.0"
 
 OFFICIAL_ADAPTERS = {
     "SD": SouthDakotaAdapter,
@@ -175,7 +174,7 @@ def decide(
             "Decision": "CLOSED_PERMANENTLY",
             "Confidence": local.score,
             "Candidate_Action": "REMOVE",
-            "Reason": "NailMap marks the business permanently closed. V3.2 treats this as a removal candidate, not an automatic removal, until the rule is benchmark-validated.",
+            "Reason": "NailMap marks the business permanently closed. Removal stays benchmark-gated.",
             "Evidence_Tier": "SOURCE_STATUS",
         }
 
@@ -203,7 +202,7 @@ def decide(
                 "Decision": "LIKELY_NAIL",
                 "Confidence": 96 if osm_nail else 93,
                 "Candidate_Action": "KEEP",
-                "Reason": "Official source verifies the beauty business identity, and a separate nail-service signal is present. Candidate KEEP still requires policy validation unless the license itself is nail-specific.",
+                "Reason": "Official source verifies the beauty business identity and a separate nail-service signal is present.",
                 "Evidence_Tier": "OFFICIAL_STATE_PLUS_NAIL_SIGNAL",
             }
         return {
@@ -228,7 +227,7 @@ def decide(
             "Decision": "LIKELY_NAIL",
             "Confidence": 92,
             "Candidate_Action": "KEEP",
-            "Reason": "Independent identity/location match indicates nail services; candidate KEEP remains benchmark-gated.",
+            "Reason": "Independent identity/location match indicates nail services; policy decides whether auto action is permitted.",
             "Evidence_Tier": "INDEPENDENT_OSM",
         }
 
@@ -246,7 +245,7 @@ def decide(
             "Decision": "LIKELY_NAIL",
             "Confidence": local.score,
             "Candidate_Action": "KEEP",
-            "Reason": "Explicit nail-service name plus operational structured listing (address/ZIP/phone/reviews). This is a high-precision local candidate, but not independent verification.",
+            "Reason": "Explicit nail-service name plus operational structured listing. Policy decides whether this calibrated rule may auto KEEP.",
             "Evidence_Tier": "NAILMAP_STRUCTURED",
         }
 
@@ -255,7 +254,7 @@ def decide(
             "Decision": "LIKELY_NAIL",
             "Confidence": local.score,
             "Candidate_Action": "REVIEW",
-            "Reason": "Business name explicitly indicates nail service, but identity/review signals are incomplete.",
+            "Reason": "Business name indicates or hints at nail service, but identity/evidence is not strong enough for automatic action.",
             "Evidence_Tier": "NAILMAP_NAME_ONLY",
         }
 
@@ -264,7 +263,7 @@ def decide(
             "Decision": "LIKELY_NOT_NAIL",
             "Confidence": local.score,
             "Candidate_Action": "REMOVE",
-            "Reason": "Business name is a high-precision non-beauty category and the listing has structured identity data. Removal remains benchmark-gated.",
+            "Reason": "Business name is a high-precision non-beauty category and the listing has structured identity data. Policy decides whether this calibrated rule may auto REMOVE.",
             "Evidence_Tier": "NAILMAP_STRUCTURED",
         }
 
@@ -282,7 +281,7 @@ def decide(
             "Decision": "UNSUPPORTED_STATE_REVIEW",
             "Confidence": local.score,
             "Candidate_Action": "REVIEW",
-            "Reason": "No official verifier adapter is installed for this state and no benchmark-safe local rule can auto-act.",
+            "Reason": "No official verifier adapter is installed for this state and no state-calibrated policy may auto-act.",
             "Evidence_Tier": "LOCAL_ONLY",
         }
 
@@ -353,6 +352,7 @@ class VerificationEngine:
             decision["Evidence_Tier"],
             local.rule_id,
             decision["Candidate_Action"],
+            allow_validated_rules=True,
         )
         dimensions = derive_dimensions(record, evidence, decision)
 
@@ -361,6 +361,7 @@ class VerificationEngine:
             **policy,
             **dimensions,
             **local.to_dict(),
+            "Policy_Profile": "SD_CALIBRATED_V1" if record.state.upper() == "SD" else "REVIEW_ONLY",
             "State_Support": state_support,
             "Checked_At": utc_now(),
             "Cache_Hit": "NO",
@@ -368,7 +369,6 @@ class VerificationEngine:
             **_flatten_evidence(evidence),
         }
 
-        # Do not cache source failures so a later run can retry.
         if not source_errors:
             self.cache.set_verification(key, config_version, result)
         return result
@@ -417,6 +417,7 @@ def verify_dataframe(
                 "Candidate_Action": "REVIEW",
                 "Auto_Action": "REVIEW",
                 "Policy_Status": "SOURCE_ERROR",
+                "Policy_Profile": "ERROR",
                 "Reason": str(exc),
                 "Evidence_Tier": "ERROR",
                 **local.to_dict(),
