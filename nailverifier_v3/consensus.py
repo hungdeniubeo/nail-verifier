@@ -7,6 +7,7 @@ from .evidence_classifier import EvidenceSignal
 
 TIER_RANK = {"A": 0, "B": 1, "C": 2, "D": 3}
 DIRECTIONAL = {"NAIL", "NOT_NAIL"}
+CONFLICT_MARKER = "#conflict#"
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,10 @@ class ConsensusResult:
         }
 
 
+def _base_source_key(value: str) -> str:
+    return value.split(CONFLICT_MARKER, 1)[0]
+
+
 def _dedupe(signals: List[EvidenceSignal]) -> List[EvidenceSignal]:
     best = {}
     for signal in signals:
@@ -52,27 +57,33 @@ def _dedupe(signals: List[EvidenceSignal]) -> List[EvidenceSignal]:
         if current is None:
             best[signal.source_key] = signal
             continue
-        current_rank = (TIER_RANK.get(current.source_tier, 9), 0 if current.direction in DIRECTIONAL else 1, current.checked_at)
-        new_rank = (TIER_RANK.get(signal.source_tier, 9), 0 if signal.direction in DIRECTIONAL else 1, signal.checked_at)
+        current_rank = (
+            TIER_RANK.get(current.source_tier, 9),
+            0 if current.direction in DIRECTIONAL else 1,
+        )
+        new_rank = (
+            TIER_RANK.get(signal.source_tier, 9),
+            0 if signal.direction in DIRECTIONAL else 1,
+        )
         if new_rank < current_rank:
             best[signal.source_key] = signal
         elif signal.direction in DIRECTIONAL and current.direction in DIRECTIONAL and signal.direction != current.direction:
-            # Preserve a same-provider contradiction by creating a synthetic key.
-            best[signal.source_key + "#conflict#" + signal.direction] = signal
+            # Preserve a same-provider contradiction for conflict detection, but
+            # source counts later collapse the synthetic key to the provider.
+            best[signal.source_key + CONFLICT_MARKER + signal.direction] = signal
+        elif new_rank == current_rank and signal.checked_at > current.checked_at:
+            best[signal.source_key] = signal
     return list(best.values())
 
 
 def _primary(signals: List[EvidenceSignal]) -> EvidenceSignal | None:
     if not signals:
         return None
-    return sorted(
-        signals,
-        key=lambda s: (
-            TIER_RANK.get(s.source_tier, 9),
-            0 if s.direction in DIRECTIONAL else 1,
-            "" if not s.checked_at else "0" + s.checked_at,
-        ),
-    )[0]
+    best_tier = min(TIER_RANK.get(s.source_tier, 9) for s in signals)
+    tier_candidates = [s for s in signals if TIER_RANK.get(s.source_tier, 9) == best_tier]
+    if any(s.direction in DIRECTIONAL for s in tier_candidates):
+        tier_candidates = [s for s in tier_candidates if s.direction in DIRECTIONAL]
+    return max(tier_candidates, key=lambda s: s.checked_at or "")
 
 
 def resolve_consensus(signals: List[EvidenceSignal]) -> ConsensusResult:
@@ -90,14 +101,16 @@ def resolve_consensus(signals: List[EvidenceSignal]) -> ConsensusResult:
         status = "CONFLICTING_EVIDENCE"
         reason = "Strong identity-matched sources disagree on nail versus not-nail classification."
     elif nail:
-        if any(s.source_tier == "A" for s in nail) or len({s.source_key for s in nail if s.source_tier in {"B", "C"}}) >= 2:
+        independent_nail = {_base_source_key(s.source_key) for s in nail if s.source_tier in {"B", "C"}}
+        if any(s.source_tier == "A" for s in nail) or len(independent_nail) >= 2:
             status = "VERIFIED_NAIL"
             reason = "Business-specific evidence meets the v3.7 nail verification gate."
         else:
             status = "LIKELY_NAIL"
             reason = "Directional nail evidence exists but is not sufficiently corroborated."
     elif not_nail:
-        if any(s.source_tier == "A" for s in not_nail) or len({s.source_key for s in not_nail if s.source_tier in {"B", "C"}}) >= 2:
+        independent_not_nail = {_base_source_key(s.source_key) for s in not_nail if s.source_tier in {"B", "C"}}
+        if any(s.source_tier == "A" for s in not_nail) or len(independent_not_nail) >= 2:
             status = "VERIFIED_NOT_NAIL"
             reason = "Business-specific affirmative non-nail evidence meets the v3.7 verification gate."
         else:
@@ -143,13 +156,16 @@ def resolve_consensus(signals: List[EvidenceSignal]) -> ConsensusResult:
     checked = max((s.checked_at for s in unique if s.checked_at), default="")
     agrees = "YES" if strong and not conflicts else "NO"
 
+    source_keys = {_base_source_key(s.source_key) for s in unique}
+    strong_source_keys = {_base_source_key(s.source_key) for s in strong}
+
     return ConsensusResult(
         verification_status=status,
         identity_status=identity_status,
         existence_status=existence_status,
         nail_service_status=nail_service,
-        evidence_source_count=len({s.source_key for s in unique}),
-        strong_evidence_count=len({s.source_key for s in strong}),
+        evidence_source_count=len(source_keys),
+        strong_evidence_count=len(strong_source_keys),
         evidence_agrees=agrees,
         evidence_conflicts=conflicts,
         primary_source=primary.source_name if primary else "",
