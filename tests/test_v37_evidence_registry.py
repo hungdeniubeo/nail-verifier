@@ -34,7 +34,7 @@ def _write_registry(path: Path, **overrides: str) -> Path:
 def _record(**overrides: str) -> BusinessRecord:
     values = {
         "company": "Example Nails",
-        "street": "100 Main St Suite 2",
+        "street": "100 Main St Ste 2",
         "city": "Sioux Falls",
         "state": "SD",
         "zip_code": "57104",
