@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Dict
 
-# Rules are deliberately disabled until a benchmark has enough manually
-# verified examples for that state. This protects large datasets from a rule
-# being promoted just because it looked good on a tiny sample.
+# These rules were calibrated on a manually verified South Dakota gold set.
+# They are state-scoped on purpose: do not automatically reuse them in another
+# state until that state's own validation set has been checked.
 VALIDATED_RULES: Dict[str, Dict[str, str]] = {
-    "SD": {},
+    "SD": {
+        "R_NAIL_EXPLICIT_STRONG": "KEEP",
+        "R_NON_NAIL_CATEGORY_STRONG": "REMOVE",
+    },
 }
 
 MIN_RULE_SAMPLES_KEEP = 20
@@ -21,6 +24,7 @@ def apply_policy(
     evidence_tier: str,
     rule_id: str,
     candidate_action: str,
+    allow_validated_rules: bool = False,
 ) -> Dict[str, str]:
     state = (state or "").upper()
 
@@ -31,13 +35,14 @@ def apply_policy(
             "Policy_Status": "SAFE_OFFICIAL",
         }
 
-    enabled = VALIDATED_RULES.get(state, {})
-    allowed_action = enabled.get(rule_id)
-    if allowed_action and allowed_action == candidate_action:
-        return {
-            "Auto_Action": candidate_action,
-            "Policy_Status": "BENCHMARK_VALIDATED_RULE",
-        }
+    if allow_validated_rules:
+        enabled = VALIDATED_RULES.get(state, {})
+        allowed_action = enabled.get(rule_id)
+        if allowed_action and allowed_action == candidate_action:
+            return {
+                "Auto_Action": candidate_action,
+                "Policy_Status": "BENCHMARK_VALIDATED_RULE",
+            }
 
     if candidate_action in {"KEEP", "REMOVE"}:
         return {
