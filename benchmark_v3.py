@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+import math
 
 import pandas as pd
 
@@ -11,6 +11,7 @@ from nailverifier_v3.policy import (
     MIN_REMOVE_PRECISION,
     MIN_RULE_SAMPLES_KEEP,
     MIN_RULE_SAMPLES_REMOVE,
+    MIN_WILSON_LOWER_BOUND,
 )
 
 
@@ -26,6 +27,17 @@ def ratio(a: int, b: int) -> float:
     return a / b if b else 0.0
 
 
+def wilson_lower_bound(correct: int, total: int, z: float = 1.96) -> float:
+    if total <= 0:
+        return 0.0
+    p = correct / total
+    z2 = z * z
+    denominator = 1.0 + z2 / total
+    center = p + z2 / (2.0 * total)
+    margin = z * math.sqrt((p * (1.0 - p) + z2 / (4.0 * total)) / total)
+    return max(0.0, (center - margin) / denominator)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", default="benchmarks/sd_gold.csv")
@@ -33,7 +45,11 @@ def main() -> None:
     args = parser.parse_args()
 
     gold = pd.read_csv(args.file, dtype=str, keep_default_na=False)
-    metadata = {"Expected"}
+    expected_col = "Gold_Label" if "Gold_Label" in gold.columns else "Expected"
+    if expected_col not in gold.columns:
+        raise ValueError("Benchmark CSV needs Expected or Gold_Label.")
+
+    metadata = {"Expected", "Gold_Label"}
     metadata.update(col for col in gold.columns if col.startswith("Gold_"))
     input_columns = [col for col in gold.columns if col not in metadata]
 
@@ -42,7 +58,7 @@ def main() -> None:
         use_osm=args.with_osm,
         force_refresh=True,
     )
-    checked["Expected"] = gold["Expected"].values
+    checked["Expected"] = gold[expected_col].astype(str).str.upper().values
     checked["Candidate_Prediction"] = checked["Candidate_Action"].map(action_to_label)
     checked["Auto_Prediction"] = checked["Auto_Action"].map(action_to_label)
 
@@ -73,11 +89,15 @@ def main() -> None:
         print("No KEEP/REMOVE candidate rules found.")
     else:
         for (rule_id, action), group in candidates.groupby(["Rule_ID", "Candidate_Action"]):
+            labeled = group[group["Expected"].isin({"NAIL", "NOT_NAIL"})].copy()
             expected_label = action_to_label(action)
-            correct = int((group["Expected"] == expected_label).sum())
-            n = len(group)
+            correct = int((labeled["Expected"] == expected_label).sum())
+            n = len(labeled)
             precision = ratio(correct, n)
-            false_remove = int(((group["Candidate_Action"] == "REMOVE") & (group["Expected"] == "NAIL")).sum())
+            lower = wilson_lower_bound(correct, n)
+            false_remove = int(
+                ((labeled["Candidate_Action"] == "REMOVE") & (labeled["Expected"] == "NAIL")).sum()
+            )
 
             if action == "KEEP":
                 min_n = MIN_RULE_SAMPLES_KEEP
@@ -86,24 +106,31 @@ def main() -> None:
                 min_n = MIN_RULE_SAMPLES_REMOVE
                 threshold = MIN_REMOVE_PRECISION
 
-            eligible = n >= min_n and precision >= threshold and false_remove == 0
+            empirical_ok = n >= min_n and precision >= threshold and false_remove == 0
+            statistical_ok = lower >= MIN_WILSON_LOWER_BOUND
+            eligible = empirical_ok and statistical_ok
+
             print(
-                "%s / %s: n=%d precision=%.2f%% false_remove=%d -> %s"
+                "%s / %s: labeled=%d precision=%.2f%% Wilson95LB=%.2f%% false_remove=%d -> %s"
                 % (
                     rule_id,
                     action,
                     n,
                     precision * 100,
+                    lower * 100,
                     false_remove,
-                    "ELIGIBLE" if eligible else "NEEDS_MORE_VALIDATION",
+                    "ELIGIBLE" if eligible else (
+                        "EMPIRICALLY_CLEAN_BUT_MORE_SAMPLES_NEEDED" if empirical_ok else "NEEDS_MORE_VALIDATION"
+                    ),
                 )
             )
 
     auto = checked[checked["Auto_Prediction"] != "ABSTAIN"].copy()
-    auto_correct = int((auto["Auto_Prediction"] == auto["Expected"]).sum()) if len(auto) else 0
+    auto_labeled = auto[auto["Expected"].isin({"NAIL", "NOT_NAIL"})].copy()
+    auto_correct = int((auto_labeled["Auto_Prediction"] == auto_labeled["Expected"]).sum()) if len(auto_labeled) else 0
     print()
     print("Actual auto-actions enabled by policy:", len(auto))
-    print("Actual auto-action precision: %.2f%%" % (ratio(auto_correct, len(auto)) * 100))
+    print("Actual labeled auto-action precision: %.2f%%" % (ratio(auto_correct, len(auto_labeled)) * 100))
 
     false_auto_remove = int(
         ((checked["Auto_Action"] == "REMOVE") & (checked["Expected"] == "NAIL")).sum()
@@ -113,7 +140,7 @@ def main() -> None:
     if false_auto_remove:
         print("GATE: FAIL — automatic false removal detected.")
     elif len(auto) == 0:
-        print("GATE: SAFE BUT NOT ENABLED — no benchmark-validated local auto rules yet.")
+        print("GATE: SAFE BUT NOT ENABLED — local rules remain shadow-only.")
     else:
         print("GATE: PARTIAL — only policy-enabled rules are active; inspect per-rule report.")
 
