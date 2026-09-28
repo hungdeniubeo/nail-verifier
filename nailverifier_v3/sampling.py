@@ -4,10 +4,14 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+# Strong SD rules already have a first calibrated gold set, but we keep a
+# smaller sample of them for ongoing drift checks. Review-only/guard rules get
+# more sampling attention so coverage can improve safely over time.
 DEFAULT_TARGETS: Dict[str, int] = {
-    "R_NAIL_EXPLICIT_STRONG": 25,
+    "R_NAIL_EXPLICIT_STRONG": 10,
     "R_NAIL_EXPLICIT_ADDRESS_STRONG": 15,
-    "R_NON_NAIL_CATEGORY_STRONG": 15,
+    "R_NAIL_NON_SERVICE_CONFLICT": 10,
+    "R_NON_NAIL_CATEGORY_STRONG": 10,
     "R_NON_NAIL_CATEGORY_ADDRESS_STRONG": 10,
     "R_BEAUTY_AMBIGUOUS": 20,
     "R_NAIL_EXPLICIT_WEAK": 10,
@@ -23,7 +27,7 @@ def make_validation_sample(
 ) -> pd.DataFrame:
     targets = targets or DEFAULT_TARGETS
     if "Rule_ID" not in result.columns:
-        raise ValueError("Result must contain Rule_ID. Run with Precision v3.2 first.")
+        raise ValueError("Result must contain Rule_ID. Run with Precision v3.3 first.")
 
     sampled: List[pd.DataFrame] = []
     used_indexes = set()
