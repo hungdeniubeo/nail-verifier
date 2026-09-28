@@ -65,9 +65,16 @@ class CacheDB:
         if not row:
             return None
         try:
-            return json.loads(row[0])
+            payload = json.loads(row[0])
         except Exception:
             return None
+
+        # Safety invalidation for an early v3.3 calibration build that briefly
+        # allowed local benchmark rules to auto KEEP/REMOVE. Shadow calibration
+        # must never reuse those cached actions.
+        if payload.get("Policy_Status") == "BENCHMARK_VALIDATED_RULE":
+            return None
+        return payload
 
     def set_verification(self, record_key: str, engine_version: str, payload: Dict[str, Any]) -> None:
         self.conn.execute(
