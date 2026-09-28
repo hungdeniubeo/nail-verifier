@@ -50,7 +50,7 @@ def test_calibrated_sd_strong_nail_rule_auto_keeps():
     assert policy["Policy_Status"] == "BENCHMARK_VALIDATED_RULE"
 
 
-def test_calibrated_sd_non_nail_rule_auto_removes():
+def test_sd_non_nail_rule_remains_shadow_only():
     policy = apply_policy(
         "SD",
         "LIKELY_NOT_NAIL",
@@ -59,11 +59,11 @@ def test_calibrated_sd_non_nail_rule_auto_removes():
         "REMOVE",
         allow_validated_rules=True,
     )
-    assert policy["Auto_Action"] == "REMOVE"
-    assert policy["Policy_Status"] == "BENCHMARK_VALIDATED_RULE"
+    assert policy["Auto_Action"] == "REVIEW"
+    assert policy["Policy_Status"] == "CANDIDATE_NEEDS_BENCHMARK"
 
 
-def test_same_rules_remain_blocked_outside_sd():
+def test_same_keep_rule_remains_blocked_outside_sd():
     policy = apply_policy(
         "CA",
         "LIKELY_NAIL",
