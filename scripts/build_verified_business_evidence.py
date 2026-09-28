@@ -87,7 +87,7 @@ def source_tier_for(url: str, notes: str) -> str:
         return "A"
 
     # Business-controlled booking/service pages count as primary when the
-    # calibration note explicitly identifies them as an official/booking page.
+    # calibration note explicitly identifies them as official/booking pages.
     if host.endswith("glossgenius.com") and any(
         marker in note for marker in ("official", "first-party", "booking site", "booking/about")
     ):
@@ -100,6 +100,7 @@ def source_tier_for(url: str, notes: str) -> str:
             "official site",
             "official company site",
             "official salon website",
+            "official business locations",
             "first-party",
         )
     ):
