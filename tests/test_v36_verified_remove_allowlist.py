@@ -26,12 +26,15 @@ def test_tier_a_verified_not_nail_identity_auto_removes(tmp_path):
     assert result["Policy_Status"] == "EVIDENCE_VERIFIED_NOT_NAIL"
 
 
-def test_single_tier_b_old_remove_identity_is_now_likely_review(tmp_path):
+def test_bowdle_is_verified_after_two_independent_bc_sources(tmp_path):
     engine = make_engine(tmp_path)
     record = BusinessRecord(company="Bowdle Building & Hardware", street="32575 US-12", city="Bowdle", state="SD", zip_code="57428", phone="6052856303", reviews=8, rating=4.9, status="OPERATIONAL")
     result = engine.verify_record(record, force_refresh=True)
-    assert result["Verification_Status"] == "LIKELY_NOT_NAIL"
-    assert result["Auto_Action"] == "REVIEW"
+    assert result["Verification_Status"] == "VERIFIED_NOT_NAIL"
+    assert result["Auto_Action"] == "REMOVE"
+    assert result["Policy_Status"] == "EVIDENCE_VERIFIED_NOT_NAIL"
+    assert result["Strong_Evidence_Count"] == 2
+    assert result["Evidence_Agrees"] == "YES"
 
 
 def test_verified_not_nail_name_at_wrong_address_stays_review(tmp_path):

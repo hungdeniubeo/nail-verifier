@@ -11,18 +11,37 @@ DEFAULT_INPUTS = [
     "benchmarks/sd_rule_calibration_v34_addendum.csv",
     "benchmarks/sd_address_strong_v35.csv",
 ]
+MANUAL_INPUTS = ["benchmarks/sd_research_evidence_v37.csv"]
 OUTPUT = "benchmarks/verified_business_evidence.csv"
 REJECTIONS = "benchmarks/evidence_migration_rejections.csv"
+
+REGISTRY_COLUMNS = [
+    "State", "Company", "Street", "City", "ZIP", "Phone",
+    "Source_Name", "Source_Tier", "Source_URL", "Observed_Category",
+    "Nail_Service_Evidence", "Business_Status_Evidence", "Evidence_Direction",
+    "Evidence_Notes", "Checked_At",
+]
+ALLOWED_DIRECTIONS = {"NAIL", "NOT_NAIL", "IDENTITY_ONLY", "STATUS_ONLY", "AMBIGUOUS"}
+ALLOWED_TIERS = {"A", "B", "C", "D"}
 
 TIER_A_HOSTS = {
     "acehardware.com", "dollargeneral.com", "truevalue.com", "coffeecupfuelstops.com",
     "rubyhousekeystone.com", "buildingcentersd.com", "silveradofranklin.com",
     "nailworldsd.com", "glamournailsspasd.com", "nailsbyjennytd.com",
     "tnailspasiouxfalls.com", "royalnail-spa.com", "skynailspasiouxfalls.com",
-    "qdnailandspa.com", "ap10nailbar.com",
+    "qdnailandspa.com", "ap10nailbar.com", "hy-vee.com", "doitbest.com",
+    "bgbuildingcenter.com",
 }
-TIER_B_HOSTS = {"bbb.org", "maps.apple.com", "chamberofcommerce.com", "local.mitchellrepublic.com", "bowdlesd.com", "dnb.com"}
-TIER_C_HOSTS = {"bestprosintown.com", "loc8nearme.com", "birdeye.com", "yellowpages.com", "verview.com", "nailsalondirectories.com", "localnailsalons.net", "local.yahoo.com", "restaurantguru.com", "waze.com", "locally.com", "nailartai.app", "baonail.com", "salonlookup.com", "usbeautyaward.com"}
+TIER_B_HOSTS = {
+    "bbb.org", "maps.apple.com", "chamberofcommerce.com", "local.mitchellrepublic.com",
+    "bowdlesd.com", "dnb.com", "hartfordsdchamber.org", "hbasiouxempire.com",
+}
+TIER_C_HOSTS = {
+    "bestprosintown.com", "loc8nearme.com", "birdeye.com", "yellowpages.com",
+    "verview.com", "nailsalondirectories.com", "localnailsalons.net", "local.yahoo.com",
+    "restaurantguru.com", "waze.com", "locally.com", "nailartai.app", "baonail.com",
+    "salonlookup.com", "usbeautyaward.com", "restaurantji.com", "tripadvisor.com",
+}
 
 
 def _host(url: str) -> str:
@@ -66,7 +85,33 @@ def _category(expected: str, company: str, notes: str) -> str:
     return "Clearly Non-Beauty Business"
 
 
-def build_registry(input_paths: Iterable[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _load_manual_research(manual_paths: Iterable[str]) -> tuple[list[dict], list[dict]]:
+    accepted: list[dict] = []
+    rejected: list[dict] = []
+    for path_value in manual_paths:
+        path = Path(path_value)
+        if not path.exists():
+            continue
+        df = pd.read_csv(path, dtype=str, keep_default_na=False)
+        for _, row in df.iterrows():
+            item = {col: str(row.get(col, "")).strip() for col in REGISTRY_COLUMNS}
+            tier = item["Source_Tier"].upper()
+            direction = item["Evidence_Direction"].upper()
+            if not item["Source_URL"] or tier not in ALLOWED_TIERS or direction not in ALLOWED_DIRECTIONS:
+                rejected.append({
+                    "State": item["State"], "Company": item["Company"], "Street": item["Street"],
+                    "City": item["City"], "ZIP": item["ZIP"], "Phone": item["Phone"],
+                    "Reason": "Invalid manual evidence row: source URL, tier, or direction",
+                    "Source_File": path.name,
+                })
+                continue
+            item["Source_Tier"] = tier
+            item["Evidence_Direction"] = direction
+            accepted.append(item)
+    return accepted, rejected
+
+
+def build_registry(input_paths: Iterable[str], manual_paths: Iterable[str] = ()) -> Tuple[pd.DataFrame, pd.DataFrame]:
     accepted = []
     rejected = []
     for path_value in input_paths:
@@ -103,7 +148,12 @@ def build_registry(input_paths: Iterable[str]) -> Tuple[pd.DataFrame, pd.DataFra
                 "Evidence_Notes": notes,
                 "Checked_At": "2026-09-28",
             })
-    accepted_df = pd.DataFrame(accepted)
+
+    manual_accepted, manual_rejected = _load_manual_research(manual_paths)
+    accepted.extend(manual_accepted)
+    rejected.extend(manual_rejected)
+
+    accepted_df = pd.DataFrame(accepted, columns=REGISTRY_COLUMNS)
     rejected_df = pd.DataFrame(rejected)
     if not accepted_df.empty:
         accepted_df = accepted_df.drop_duplicates(subset=["State", "Company", "Street", "City", "ZIP", "Phone", "Source_URL", "Evidence_Direction"])
@@ -114,7 +164,7 @@ def build_registry(input_paths: Iterable[str]) -> Tuple[pd.DataFrame, pd.DataFra
 
 
 def main() -> None:
-    accepted, rejected = build_registry(DEFAULT_INPUTS)
+    accepted, rejected = build_registry(DEFAULT_INPUTS, MANUAL_INPUTS)
     Path(OUTPUT).parent.mkdir(parents=True, exist_ok=True)
     accepted.to_csv(OUTPUT, index=False)
     rejected.to_csv(REJECTIONS, index=False)
