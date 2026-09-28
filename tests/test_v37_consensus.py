@@ -2,8 +2,8 @@ from nailverifier_v3.consensus import resolve_consensus
 from nailverifier_v3.evidence_classifier import EvidenceSignal
 
 
-def sig(key, tier, direction, category="", service="", status="ACTIVE"):
-    return EvidenceSignal(key, key, tier, f"https://{key}/x", direction, tier != "D", category, service, status, "2026-09-28", "note")
+def sig(key, tier, direction, category="", service="", status="ACTIVE", checked_at="2026-09-28"):
+    return EvidenceSignal(key, key, tier, f"https://{key}/x", direction, tier != "D", category, service, status, checked_at, "note")
 
 
 def test_one_tier_a_nail_verifies():
@@ -36,6 +36,25 @@ def test_strong_conflict_forces_review_status():
     out = resolve_consensus([sig("nail.com","A","NAIL"),sig("hardware.com","A","NOT_NAIL")]).to_dict()
     assert out["Verification_Status"] == "CONFLICTING_EVIDENCE"
     assert out["Evidence_Conflicts"] >= 1
+
+
+def test_same_provider_contradiction_counts_one_independent_source():
+    out = resolve_consensus([
+        sig("same.com", "A", "NAIL"),
+        sig("same.com", "A", "NOT_NAIL"),
+    ]).to_dict()
+    assert out["Verification_Status"] == "CONFLICTING_EVIDENCE"
+    assert out["Evidence_Source_Count"] == 1
+    assert out["Strong_Evidence_Count"] == 1
+
+
+def test_primary_source_prefers_newest_within_same_tier_and_direction():
+    out = resolve_consensus([
+        sig("old.com", "B", "NAIL", checked_at="2026-01-01"),
+        sig("new.com", "B", "NAIL", checked_at="2026-09-28"),
+    ]).to_dict()
+    assert out["Verification_Status"] == "VERIFIED_NAIL"
+    assert out["Primary_Source"] == "new.com"
 
 
 def test_beauty_identity_without_nail_claim_is_unknown():
