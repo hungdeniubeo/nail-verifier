@@ -1,8 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Iterable
 
 import pandas as pd
+
+
+def load_gold_files(paths: Iterable[str]) -> pd.DataFrame:
+    frames = []
+    for path_value in paths:
+        path = Path(path_value)
+        frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+        frame["Gold_File"] = path.name
+        frames.append(frame)
+    if not frames:
+        raise ValueError("At least one gold CSV is required.")
+    return pd.concat(frames, ignore_index=True, sort=False)
 
 
 def evaluate_gold(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
