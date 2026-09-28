@@ -2,16 +2,17 @@ from __future__ import annotations
 
 from typing import Dict
 
-# No local heuristic rule is auto-enabled yet.
-# Keep state-scoped validation data separate from production policy until the
-# rule has enough independent labels and survives a statistical confidence
-# check. Official nail-specific state evidence may still auto KEEP.
+# State-scoped calibrated rules.
+# South Dakota R_NAIL_EXPLICIT_STRONG reached 74/74 labeled correct cases
+# across the base calibration + v34 addendum, with Wilson 95% lower bound
+# just above the 0.95 gate. REMOVE rules remain shadow-only because the full
+# 35-case SD cohort is empirically clean but the Wilson lower bound is ~0.90.
 VALIDATED_RULES: Dict[str, Dict[str, str]] = {
-    "SD": {},
+    "SD": {
+        "R_NAIL_EXPLICIT_STRONG": "KEEP",
+    },
 }
 
-# Empirical thresholds are reported, but they are NOT sufficient by themselves
-# to enable a rule. benchmark_v3.py also reports a Wilson confidence lower bound.
 MIN_RULE_SAMPLES_KEEP = 20
 MIN_RULE_SAMPLES_REMOVE = 20
 MIN_KEEP_PRECISION = 0.99
