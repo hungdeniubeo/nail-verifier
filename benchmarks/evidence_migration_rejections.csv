@@ -1,0 +1,6 @@
+State,Company,Street,City,ZIP,Phone,Expected,Gold_Source_URL,Gold_Notes,Rejection_Reason
+SD,Anna's Nails,712 University Ave Ste A,Hot Springs,57747,—,UNKNOWN,,No sufficiently strong independent source found in this calibration pass.,UNRESOLVED_LABEL
+SD,Coffee Cup Fuel Stop,US-83,Vivian,57576,(605) 683-4666,NOT_NAIL,https://www.coffeecupfuelstops.com/hartford,Official site identifies fuel stop/convenience/travel store.,SOURCE_LOCATION_CONFLICT
+SD,K & E Nail Studio LLC,522 7th St Suite 221,Rapid City,57701,—,UNKNOWN,,No sufficiently strong independent source found in this calibration pass.,UNRESOLVED_LABEL
+SD,K & E Nail Studio LLC,522 7th St Suite 221,Rapid City,57701,—,UNKNOWN,,Exact-name/address web searches did not produce an independent current source strong enough to verify this specific business. Keep REVIEW. Checked 2026-09-28.,UNRESOLVED_LABEL
+SD,Nailday by Nee,5201 S Solberg Ave suite 224,Sioux Falls,57108,(605) 530-6580,UNKNOWN,,No sufficiently strong independent source found in this calibration pass.,UNRESOLVED_LABEL

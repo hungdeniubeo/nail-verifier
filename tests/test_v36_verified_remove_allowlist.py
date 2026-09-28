@@ -17,7 +17,7 @@ def make_engine(tmp_path):
     return engine
 
 
-def test_verified_not_nail_identity_auto_removes(tmp_path):
+def test_old_verified_not_nail_allowlist_is_re_evaluated_and_not_grandfathered(tmp_path):
     engine = make_engine(tmp_path)
     record = BusinessRecord(
         company="Bowdle Building & Hardware",
@@ -35,8 +35,9 @@ def test_verified_not_nail_identity_auto_removes(tmp_path):
 
     assert result["Rule_ID"] == "R_NON_NAIL_CATEGORY_STRONG"
     assert result["Candidate_Action"] == "REMOVE"
-    assert result["Auto_Action"] == "REMOVE"
-    assert result["Policy_Status"] == "VERIFIED_IDENTITY_ALLOWLIST"
+    assert result["Verification_Status"] == "LIKELY_NOT_NAIL"
+    assert result["Auto_Action"] == "REVIEW"
+    assert result["Policy_Status"] == "EVIDENCE_REVIEW"
 
 
 def test_verified_not_nail_name_at_wrong_address_stays_review(tmp_path):
@@ -56,8 +57,9 @@ def test_verified_not_nail_name_at_wrong_address_stays_review(tmp_path):
     result = engine.verify_record(record, force_refresh=True)
 
     assert result["Candidate_Action"] == "REMOVE"
+    assert result["Verification_Status"] == "LIKELY_NOT_NAIL"
     assert result["Auto_Action"] == "REVIEW"
-    assert result["Policy_Status"] == "CANDIDATE_NEEDS_BENCHMARK"
+    assert result["Policy_Status"] == "EVIDENCE_REVIEW"
 
 
 def test_unseen_strong_non_nail_business_stays_review(tmp_path):
@@ -78,11 +80,12 @@ def test_unseen_strong_non_nail_business_stays_review(tmp_path):
 
     assert result["Rule_ID"] == "R_NON_NAIL_CATEGORY_STRONG"
     assert result["Candidate_Action"] == "REMOVE"
+    assert result["Verification_Status"] == "LIKELY_NOT_NAIL"
     assert result["Auto_Action"] == "REVIEW"
-    assert result["Policy_Status"] == "CANDIDATE_NEEDS_BENCHMARK"
+    assert result["Policy_Status"] == "EVIDENCE_REVIEW"
 
 
-def test_verified_not_nail_allowlist_is_state_scoped(tmp_path):
+def test_legacy_not_nail_allowlist_path_is_state_scoped(tmp_path):
     engine = VerificationEngine(cache_path=str(tmp_path / "cache.sqlite3"), use_osm=False)
     record = BusinessRecord(
         company="Bowdle Building & Hardware",
@@ -99,10 +102,11 @@ def test_verified_not_nail_allowlist_is_state_scoped(tmp_path):
     result = engine.verify_record(record, force_refresh=True)
 
     assert result["Auto_Action"] == "REVIEW"
-    assert result["Policy_Status"] != "VERIFIED_IDENTITY_ALLOWLIST"
+    assert result["Policy_Status"] == "EVIDENCE_REVIEW"
+    assert result["Verification_Status"] != "VERIFIED_NOT_NAIL"
 
 
-def test_identity_collision_still_blocks_verified_remove(tmp_path):
+def test_identity_collision_still_blocks_candidate_remove(tmp_path):
     engine = make_engine(tmp_path)
     df = pd.DataFrame(
         [
@@ -137,11 +141,10 @@ def test_identity_collision_still_blocks_verified_remove(tmp_path):
     assert grocery["Candidate_Action"] == "REMOVE"
     assert grocery["Identity_Collision"] == "YES"
     assert grocery["Auto_Action"] == "REVIEW"
-    assert grocery["Policy_Status"] == "IDENTITY_COLLISION_REVIEW"
 
 
-def test_v36_bumps_cache_version_and_policy_profile(tmp_path):
-    assert ENGINE_VERSION == "3.6.0"
+def test_v37_bumps_cache_version_and_uses_evidence_first_policy_profile(tmp_path):
+    assert ENGINE_VERSION == "3.7.0"
 
     engine = make_engine(tmp_path)
     record = BusinessRecord(
@@ -157,4 +160,5 @@ def test_v36_bumps_cache_version_and_policy_profile(tmp_path):
     )
 
     result = engine.verify_record(record, force_refresh=True)
-    assert result["Policy_Profile"] == "SD_EXACT_KEEP_REMOVE_V1_COLLISION_GUARD"
+    assert result["Policy_Profile"] == "EVIDENCE_FIRST_V1_COLLISION_GUARD"
+    assert result["Registry_Version"] == engine.registry.version

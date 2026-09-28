@@ -15,7 +15,7 @@ def make_engine(tmp_path):
     return engine
 
 
-def test_verified_address_strong_identity_auto_keeps(tmp_path):
+def test_old_address_strong_allowlist_no_longer_auto_keeps(tmp_path):
     engine = make_engine(tmp_path)
     record = BusinessRecord(
         company="Anna's Nails",
@@ -32,8 +32,9 @@ def test_verified_address_strong_identity_auto_keeps(tmp_path):
 
     assert result["Rule_ID"] == "R_NAIL_EXPLICIT_ADDRESS_STRONG"
     assert result["Candidate_Action"] == "KEEP"
-    assert result["Auto_Action"] == "KEEP"
-    assert result["Policy_Status"] == "VERIFIED_IDENTITY_ALLOWLIST"
+    assert result["Verification_Status"] == "LIKELY_NAIL"
+    assert result["Auto_Action"] == "REVIEW"
+    assert result["Policy_Status"] == "EVIDENCE_REVIEW"
 
 
 def test_allowlisted_name_at_wrong_address_stays_review(tmp_path):
@@ -51,8 +52,9 @@ def test_allowlisted_name_at_wrong_address_stays_review(tmp_path):
 
     result = engine.verify_record(record, force_refresh=True)
 
+    assert result["Verification_Status"] == "LIKELY_NAIL"
     assert result["Auto_Action"] == "REVIEW"
-    assert result["Policy_Status"] == "CANDIDATE_NEEDS_BENCHMARK"
+    assert result["Policy_Status"] == "EVIDENCE_REVIEW"
 
 
 def test_unknown_address_strong_business_stays_review(tmp_path):
@@ -71,11 +73,12 @@ def test_unknown_address_strong_business_stays_review(tmp_path):
     result = engine.verify_record(record, force_refresh=True)
 
     assert result["Rule_ID"] == "R_NAIL_EXPLICIT_ADDRESS_STRONG"
+    assert result["Verification_Status"] == "LIKELY_NAIL"
     assert result["Auto_Action"] == "REVIEW"
-    assert result["Policy_Status"] == "CANDIDATE_NEEDS_BENCHMARK"
+    assert result["Policy_Status"] == "EVIDENCE_REVIEW"
 
 
-def test_verified_identity_allowlist_is_state_scoped(tmp_path):
+def test_legacy_exact_identity_path_does_not_leak_outside_sd(tmp_path):
     engine = VerificationEngine(cache_path=str(tmp_path / "cache.sqlite3"), use_osm=False)
     record = BusinessRecord(
         company="Anna's Nails",
@@ -91,4 +94,5 @@ def test_verified_identity_allowlist_is_state_scoped(tmp_path):
     result = engine.verify_record(record, force_refresh=True)
 
     assert result["Auto_Action"] == "REVIEW"
-    assert result["Policy_Status"] != "VERIFIED_IDENTITY_ALLOWLIST"
+    assert result["Policy_Status"] == "EVIDENCE_REVIEW"
+    assert result["Verification_Status"] != "VERIFIED_NAIL"
