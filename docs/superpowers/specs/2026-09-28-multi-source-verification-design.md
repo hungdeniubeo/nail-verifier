@@ -21,9 +21,11 @@ The system must prefer REVIEW over an unsupported KEEP or REMOVE.
 
 Rules such as business-name patterns, review count, category words, or NailMap metadata may prioritize investigation, but they are not ground truth.
 
-A row is only VERIFIED when there is business-specific evidence tied to the same real-world identity.
+A row is only VERIFIED when there is business-specific evidence tied to the same real-world identity and the evidence meets the verification gate in this spec.
 
 Absence of evidence is not evidence of absence. A salon website that does not mention nails is not enough by itself to prove NOT_NAIL.
+
+Existing v3.6 allowlists are not grandfathered into VERIFIED status. Every old KEEP/REMOVE identity must pass the new evidence gate. V3.7 is allowed to downgrade an old automatic action to REVIEW when its stored evidence is too weak.
 
 ## 3. Final verification states
 
@@ -42,12 +44,14 @@ These statuses are separate from `Candidate_Action` and `Auto_Action`.
 
 - `VERIFIED_NAIL` → eligible for KEEP, subject to collision/safety guards.
 - `VERIFIED_NOT_NAIL` → eligible for REMOVE, subject to collision/safety guards.
-- `LIKELY_NAIL` → no verified claim; default REVIEW unless a separate existing policy explicitly permits KEEP.
+- `LIKELY_NAIL` → REVIEW by default in the evidence-first v3.7 policy.
 - `LIKELY_NOT_NAIL` → REVIEW.
 - `CONFLICTING_EVIDENCE` → REVIEW.
 - `UNKNOWN` → REVIEW.
 
 V3.7 must never Auto REMOVE a row unless its final verification status is `VERIFIED_NOT_NAIL`.
+
+For the evidence-first v3.7 profile, generic calibrated KEEP rules no longer count as proof and must not silently turn a `LIKELY_NAIL` row into verified KEEP. Old rule outputs remain visible for prioritization/audit.
 
 ## 4. Verification pipeline
 
@@ -285,7 +289,7 @@ Responsibilities after v3.7:
 
 - consume final verification status
 - decide whether a row is eligible for KEEP, REMOVE, or REVIEW
-- retain state-scoped safety rules during migration
+- retain only general/state safety gates needed during migration
 
 Business identity data must move out of `policy.py` into the evidence registry.
 
@@ -325,47 +329,46 @@ Existing audit fields remain, including rules, candidate actions, collisions, no
 
 V3.7 will first migrate already researched business-specific evidence. This avoids pretending the entire 534-row dataset is already verified.
 
-Phase 1 migration:
+### Phase 1 — re-audit current exact actions
 
-- 35 current SD strong NOT_NAIL identities from v3.3/v3.4 calibration
-- 7 v3.5 address-strong NAIL identities
+Start from:
 
-Phase 2 migration:
+- all 35 current SD strong NOT_NAIL identities with stored source evidence
+- all existing v3.5 exact KEEP identities with stored source evidence
 
-- every additional nail business in existing calibration files that already has a source URL and business-specific evidence
+Each identity is re-evaluated under the stricter v3.7 gate. It is not automatically considered verified just because it was previously allowlisted.
 
-Rows that were only inferred through the 74/74 strong-name calibration remain `LIKELY_NAIL` unless they also have individual evidence in the registry.
+If a previous exact action only has one weak/secondary source, it remains `LIKELY_*`/REVIEW until enough evidence is added.
 
-The current calibrated strong KEEP rule may remain visible during transition, but `Verification_Status` must make clear whether a row is individually verified or only rule-derived.
+### Phase 2 — migrate other existing researched nail records
+
+Migrate every additional business in existing calibration files that already has a source URL and business-specific evidence, then classify it using the same gate.
+
+Rows that were only inferred through the 74/74 strong-name calibration remain `LIKELY_NAIL` unless they also have individual evidence meeting the gate.
 
 ## 10. Consensus rules for v3.7
 
-The first implementation should be conservative and deterministic.
+The first implementation is conservative and deterministic.
 
 ### VERIFIED_NAIL
 
-Requires:
+Requires verified identity and no strong NOT_NAIL conflict, plus either:
 
-- verified identity, and
-- at least one strong business-specific source with explicit nail-service/category evidence, and
-- no strong NOT_NAIL conflict.
+1. one Tier A business-specific source that explicitly proves nail service/category; or
+2. at least two independent Tier B/C business-specific sources that agree on nail service/category, with at least one source explicitly naming nail service or nail-salon category.
 
-A Tier A explicit nail service source is sufficient when identity is exact.
-
-A Tier B/C source may be sufficient when it explicitly classifies the exact business as a nail salon or explicitly lists nail services and identity matching is strong.
+A single Tier B or Tier C directory listing is not enough for VERIFIED_NAIL in v3.7. It produces at most `LIKELY_NAIL` until corroborated.
 
 ### VERIFIED_NOT_NAIL
 
-Requires:
+Requires verified identity, no positive nail-service evidence, no unresolved identity collision, plus either:
 
-- verified identity, and
-- strong affirmative non-beauty/category evidence for the exact business, and
-- no positive nail-service evidence, and
-- no unresolved identity collision.
+1. one Tier A source that affirmatively identifies the exact business as a clearly non-beauty business (for example an official Ace Hardware/Dollar General locator or official restaurant/fuel-store website); or
+2. at least two independent Tier B/C sources that agree on a clearly non-beauty category for the exact business.
 
-Examples include an exact official Ace Hardware store, Dollar General location, restaurant website, grocery store, fuel stop, or hardware/business directory entry.
+A single Tier B/C directory listing is not enough for VERIFIED_NOT_NAIL in v3.7. It produces at most `LIKELY_NOT_NAIL` until corroborated.
 
-Beauty/hair/spa businesses do not qualify for VERIFIED_NOT_NAIL merely because nail services are absent from one source.
+Beauty/hair/spa businesses do not qualify for VERIFIED_NOT_NAIL merely because nail services are absent from one or more generic listings. Their service evidence must be affirmatively resolved.
 
 ### CONFLICTING_EVIDENCE
 
@@ -380,21 +383,21 @@ Used when heuristics or weaker evidence point in one direction but the VERIFIED 
 These are non-negotiable regression requirements:
 
 1. Auto REMOVE requires `Verification_Status = VERIFIED_NOT_NAIL`.
-2. Identity collision overrides automatic KEEP/REMOVE to REVIEW.
-3. Wrong-address same-name evidence must not verify a business.
-4. Wrong-state evidence must not leak across state scope.
-5. A NailMap name pattern alone can never create VERIFIED status.
-6. Missing nail services on one salon page can never by itself create VERIFIED_NOT_NAIL.
-7. Strong contradictory evidence produces REVIEW.
-8. Source errors never improve confidence or enable auto action.
-9. Existing normalized-address recovery must continue to work.
-10. Business-specific evidence and the reason for the result must be exportable and auditable.
+2. Under the evidence-first v3.7 profile, Auto KEEP requires `Verification_Status = VERIFIED_NAIL`.
+3. Identity collision overrides automatic KEEP/REMOVE to REVIEW.
+4. Wrong-address same-name evidence must not verify a business.
+5. Wrong-state evidence must not leak across state scope.
+6. A NailMap name pattern alone can never create VERIFIED status.
+7. Missing nail services on one salon page can never by itself create VERIFIED_NOT_NAIL.
+8. A single Tier B/C directory source cannot create VERIFIED status.
+9. Strong contradictory evidence produces REVIEW.
+10. Source errors never improve confidence or enable auto action.
+11. Existing normalized-address recovery must continue to work.
+12. Business-specific evidence and the reason for the result must be exportable and auditable.
 
 ## 12. Testing strategy
 
 Development uses TDD.
-
-Required test groups:
 
 ### Registry matching
 
@@ -402,12 +405,16 @@ Required test groups:
 - same name/wrong address does not match
 - same name/wrong state does not match
 - phone mismatch behavior is conservative
-- missing phone identities can still match only when the stored evidence identity is otherwise exact and the registry record explicitly permits the missing phone through its own data
+- missing phone identities only match when the remaining identity fields are exact enough for the stored source record
 
 ### Consensus
 
 - Tier A explicit nail service → VERIFIED_NAIL
-- exact official hardware store → VERIFIED_NOT_NAIL
+- Tier A exact official hardware/store/restaurant identity → VERIFIED_NOT_NAIL
+- one Tier C nail directory → LIKELY_NAIL, not VERIFIED_NAIL
+- one Tier C hardware directory → LIKELY_NOT_NAIL, not VERIFIED_NOT_NAIL
+- two independent B/C nail sources → VERIFIED_NAIL
+- two independent B/C non-beauty sources → VERIFIED_NOT_NAIL
 - hair salon with no nail mention → not VERIFIED_NOT_NAIL
 - nail and not-nail strong sources → CONFLICTING_EVIDENCE
 - heuristic-only record → LIKELY/UNKNOWN, never VERIFIED
@@ -417,14 +424,15 @@ Required test groups:
 - VERIFIED_NOT_NAIL → REMOVE eligibility
 - LIKELY_NOT_NAIL → REVIEW
 - VERIFIED_NAIL → KEEP eligibility
+- LIKELY_NAIL → REVIEW in evidence-first v3.7
 - collision overrides REMOVE
 - collision overrides KEEP
 
 ### Migration/regression
 
-- Bowdle Building & Hardware remains verified not-nail and removable
-- Hy-Vee Grocery Store remains blocked by collision
-- Anna's Nails becomes verified nail from registry evidence
+- Bowdle Building & Hardware is re-evaluated from its stored source and remains removable only if that source meets the new gate
+- Hy-Vee Grocery Store remains blocked by collision even if evidence otherwise verifies it
+- existing exact KEEP identities are re-evaluated rather than grandfathered
 - Cobe Nails/Rose Nails collision behavior remains protected
 - Hang Nails Salon must not be labeled individually VERIFIED merely because the strong nail-name rule fires unless registry/live evidence verifies it
 
@@ -445,8 +453,8 @@ The table should show `Verification_Status`, source count, primary source, URL, 
 
 The UI must explicitly distinguish:
 
-- `VERIFIED_NAIL` = business-specific evidence
-- `LIKELY_NAIL` = rule/weak evidence only
+- `VERIFIED_NAIL` = business-specific evidence meeting the v3.7 gate
+- `LIKELY_NAIL` = rule/weak/uncorroborated evidence only
 
 ## 14. Scaling strategy
 
@@ -467,10 +475,12 @@ Live web research and state-specific adapters can feed the same evidence model w
 V3.7 is complete when:
 
 - all tests pass
-- current 42 exact researched identities are migrated to the registry
+- all existing business-specific calibration evidence is migrated or explicitly rejected as insufficient
+- no old allowlist identity is grandfathered without meeting the new gate
 - verified statuses include auditable source URLs/evidence
 - heuristic-only rows are clearly labeled unverified
-- all Auto REMOVE rows are `VERIFIED_NOT_NAIL`
+- every Auto REMOVE row is `VERIFIED_NOT_NAIL`
+- every Auto KEEP row in the evidence-first profile is `VERIFIED_NAIL`
 - collision protection remains active
 - the 534-row SD run completes without source errors caused by the new registry pipeline
 - output clearly explains why each verified business was classified
@@ -481,7 +491,7 @@ V3.7 will not yet:
 
 - prove all 534 South Dakota businesses
 - auto-research every business on the live web during a bulk run
-- enable generic REMOVE rules for future unseen businesses
+- enable generic KEEP/REMOVE for future unseen businesses solely from name/category rules
 - treat one missing service list as proof that a beauty business does not offer nails
 - solve all 50 states at once
 
