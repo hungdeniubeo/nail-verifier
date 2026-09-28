@@ -22,10 +22,10 @@ from .normalize import (
     validate_mapping,
 )
 from .osm import OSMVerifier
-from .policy import apply_policy
+from .policy import apply_policy, apply_verified_identity_policy
 from .states.sd import SouthDakotaAdapter
 
-ENGINE_VERSION = "3.4.1"
+ENGINE_VERSION = "3.5.0"
 
 OFFICIAL_ADAPTERS = {
     "SD": SouthDakotaAdapter,
@@ -355,6 +355,15 @@ class VerificationEngine:
             decision["Candidate_Action"],
             allow_validated_rules=True,
         )
+        if policy.get("Policy_Status") == "CANDIDATE_NEEDS_BENCHMARK":
+            exact_policy = apply_verified_identity_policy(
+                record,
+                local.rule_id,
+                decision["Candidate_Action"],
+            )
+            if exact_policy:
+                policy = exact_policy
+
         dimensions = derive_dimensions(record, evidence, decision)
 
         result: Dict[str, Any] = {
@@ -362,7 +371,7 @@ class VerificationEngine:
             **policy,
             **dimensions,
             **local.to_dict(),
-            "Policy_Profile": "SD_KEEP_V1_COLLISION_GUARD" if record.state.upper() == "SD" else "REVIEW_ONLY",
+            "Policy_Profile": "SD_KEEP_V2_EXACT_ALLOWLIST_COLLISION_GUARD" if record.state.upper() == "SD" else "REVIEW_ONLY",
             "State_Support": state_support,
             "Checked_At": utc_now(),
             "Cache_Hit": "NO",
