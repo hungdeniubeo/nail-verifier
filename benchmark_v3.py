@@ -5,6 +5,7 @@ import math
 
 import pandas as pd
 
+from nailverifier_v3.calibration import load_gold_files
 from nailverifier_v3.engine import ENGINE_VERSION, verify_dataframe
 from nailverifier_v3.policy import (
     MIN_KEEP_PRECISION,
@@ -40,11 +41,17 @@ def wilson_lower_bound(correct: int, total: int, z: float = 1.96) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--file", default="benchmarks/sd_gold.csv")
+    parser.add_argument(
+        "--file",
+        action="append",
+        default=None,
+        help="Gold CSV. Repeat --file to combine multiple calibration files.",
+    )
     parser.add_argument("--with-osm", action="store_true")
     args = parser.parse_args()
 
-    gold = pd.read_csv(args.file, dtype=str, keep_default_na=False)
+    gold_files = args.file or ["benchmarks/sd_gold.csv"]
+    gold = load_gold_files(gold_files)
     expected_col = "Gold_Label" if "Gold_Label" in gold.columns else "Expected"
     if expected_col not in gold.columns:
         raise ValueError("Benchmark CSV needs Expected or Gold_Label.")
@@ -59,6 +66,7 @@ def main() -> None:
         force_refresh=True,
     )
     checked["Expected"] = gold[expected_col].astype(str).str.upper().values
+    checked["Gold_File"] = gold["Gold_File"].values
     checked["Candidate_Prediction"] = checked["Candidate_Action"].map(action_to_label)
     checked["Auto_Prediction"] = checked["Auto_Action"].map(action_to_label)
 
@@ -72,6 +80,7 @@ def main() -> None:
                 "Candidate_Action",
                 "Auto_Action",
                 "Policy_Status",
+                "Gold_File",
                 "Reason",
             ]
         ].to_string(index=False)
@@ -80,6 +89,7 @@ def main() -> None:
     print()
     print("Engine:", ENGINE_VERSION)
     print("Profile:", "TEST_WITH_OSM" if args.with_osm else "PRODUCTION_OFFICIAL_BATCH")
+    print("Gold files:", ", ".join(gold_files))
     print("Gold rows:", len(checked))
 
     print()
