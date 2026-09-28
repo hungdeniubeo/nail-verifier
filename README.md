@@ -1,112 +1,103 @@
 # Nail Verifier
 
-Tool có 2 phase:
+Precision-first verifier for NailMap CSV data.
 
-1. Phase 1 — Export CSV từ NailMap
-2. Phase 2 — Precision verification
+## Current version: Precision v3.4 Production Candidate
 
-## Phase 1
+V3.4 is intentionally conservative:
 
-Dùng `export_visible_table.js` trên NailMap.
+- South Dakota `R_NAIL_EXPLICIT_STRONG` may Auto KEEP.
+- South Dakota local REMOVE rules are still REVIEW-only.
+- Other states do not inherit South Dakota auto-policy.
+- Public Nominatim is disabled for bulk runs.
+- Official state evidence remains higher priority than local heuristics.
 
-Exporter cuộn virtual table, chống duplicate, đọc total rows và chỉ export khi số dòng thu được khớp total.
+## Why only KEEP is enabled
 
----
+The strong SD nail-name rule was frozen before the latest validation addendum.
+Across the base calibration plus the addendum:
 
-# Phase 2 — Precision v3.3 Shadow Calibration
+- 74 labeled strong-rule cases were independently checked.
+- 74/74 matched real nail-service businesses.
+- empirical precision on that checked sample = 100%.
+- Wilson 95% lower bound is about 95.06%.
+- the latest 50-case addendum contains 50/50 nail matches.
 
-Nguyên tắc:
+This is evidence for a production candidate, not a guarantee of 100% real-world accuracy.
 
-> precision > coverage
+The strong SD non-nail rule is still blocked:
 
-Nếu chưa đủ chắc chắn thì REVIEW, không đoán.
+- all 35 candidates in the current 534-row SD dataset were independently checked as non-nail;
+- but 35 perfect observations only give a Wilson 95% lower bound of about 90.11%;
+- therefore V3.4 does **not** auto-remove those rows.
 
-## Decision / Candidate / Auto
+## Safety guards
 
-V3.3 tách riêng:
+Names such as these never qualify for the strong nail Auto KEEP rule:
 
-- `Decision`: tool đánh giá record thuộc nhóm nào.
-- `Candidate_Action`: rule đề xuất KEEP / REMOVE / REVIEW.
-- `Auto_Action`: hành động thật sự được phép chạy tự động.
+- Nail Supply
+- Nail Wholesale
+- Nail Academy
+- Nail School
+- Nail Products
+- Nail Equipment
+- Nail Distributor
 
-Local rule hiện vẫn **shadow-only**. Candidate KEEP/REMOVE không tự động trở thành Auto_Action.
+They are routed to `R_NAIL_NON_SERVICE_CONFLICT` and remain REVIEW.
 
-Official nail-specific current state license vẫn có thể Auto KEEP vì evidence tier mạnh hơn heuristic local.
+## Main output fields
 
-## Vì sao chưa bật auto local rules
+- `Decision`
+- `Candidate_Action`
+- `Auto_Action`
+- `Policy_Status`
+- `Policy_Profile`
+- `Rule_ID`
+- `Business_Exists`
+- `Nail_Service`
+- `Risk_Flags`
+- `Shared_Address_Count`
+- `Exact_Record_Duplicate_Count`
+- official-source evidence columns
+- `Reason`
+- `Source_Errors`
 
-Một sample nhỏ có thể cho kết quả 20/20 hoặc 30/30 nhưng vẫn chưa đủ để khẳng định rule sẽ giữ precision rất cao ở hàng chục nghìn record.
+## South Dakota policy
 
-Benchmark v3.3 vì vậy đo thêm **Wilson 95% lower confidence bound**.
+### Auto KEEP
 
-Báo cáo cho mỗi rule gồm:
+`R_NAIL_EXPLICIT_STRONG`
 
-- số gold labels;
-- empirical precision;
-- Wilson 95% lower bound;
-- false-remove count;
-- trạng thái cần thêm validation hay đủ điều kiện.
+Requires:
 
-`UNKNOWN` gold label không bị tính như đúng hoặc sai.
+- explicit nail-service name;
+- `OPERATIONAL`;
+- location/ZIP;
+- phone;
+- at least 3 reviews;
+- no non-service nail conflict term.
 
-## Calibration South Dakota
-
-Repo có:
-
-- `benchmarks/sd_gold.csv`
-- `benchmarks/sd_rule_calibration_v33.csv`
-
-`sd_rule_calibration_v33.csv` chứa các business đã được đối chiếu bằng website chính thức / business directory / map listing / nguồn độc lập khác.
-
-Hiện local rules **chưa được auto-enable**.
-
-## Local rule engine
-
-Các rule quan trọng:
-
-- `R_NAIL_EXPLICIT_STRONG`
-  - explicit nail name;
-  - OPERATIONAL;
-  - location + phone;
-  - >= 3 reviews;
-  - Candidate KEEP.
+### Still REVIEW
 
 - `R_NAIL_EXPLICIT_ADDRESS_STRONG`
-  - explicit nail name;
-  - location;
-  - >= 5 reviews;
-  - Candidate KEEP nhưng benchmark riêng.
-
-- `R_NAIL_NON_SERVICE_CONFLICT`
-  - tên có nail nhưng đồng thời có các từ như Supply / Wholesale / Academy / School / Products / Equipment...;
-  - REVIEW để tránh nhầm nail-product/training business với nail salon.
-
 - `R_NAIL_EXPLICIT_WEAK`
-  - explicit nail name nhưng identity/review yếu;
-  - REVIEW.
-
 - `R_NAIL_STYLING_HINT`
-  - polish / polished / pinky / tips / toes / claws / lacquer / gloss;
-  - REVIEW.
-
-- `R_NON_NAIL_CATEGORY_STRONG`
-  - hardware / restaurant / grocery / fuel / hotel...;
-  - structured identity;
-  - Candidate REMOVE.
-
 - `R_BEAUTY_AMBIGUOUS`
-  - hair / salon / spa / beauty / lash...;
-  - REVIEW vì beauty business không đồng nghĩa nail salon.
+- `R_UNKNOWN`
+- `R_NON_NAIL_CATEGORY_STRONG`
+- `R_NON_NAIL_CATEGORY_ADDRESS_STRONG`
+- permanently/temporarily closed local-source rules unless independently handled by stronger evidence
 
 ## Official South Dakota adapter
 
-- tải roster một lần;
-- index local theo ZIP / City;
-- shortlist candidate;
-- chỉ mở detail cho candidate hợp lý;
-- distinctive business-name + address guard chống false match.
+The SD adapter:
 
-Regression quan trọng:
+1. downloads the current business-license roster once;
+2. indexes it locally by ZIP/city;
+3. shortlists plausible business-name candidates;
+4. validates detail pages with distinctive-name + address guards.
+
+Regression case:
 
 ```text
 Audra Day Spa & Salon
@@ -114,33 +105,26 @@ Audra Day Spa & Salon
 Revive Day Spa - Apprentice Salon
 ```
 
-Trong khi Revive DBA/legal-name variant chỉ được match khi distinctive token và location cùng khớp.
+while a legal/DBA variant such as Revive can match when distinctive name and address agree.
 
-## Public OpenStreetMap
+## Calibration files
 
-- Test 20 / Test 50 có thể bật Nominatim.
-- Full/bulk pilot tự tắt Nominatim.
-- Không dùng public Nominatim như bulk backend.
+- `benchmarks/sd_rule_calibration_v33.csv`
+- `benchmarks/sd_rule_calibration_v34_addendum.csv`
 
-## Cache
+The addendum contains 50 independently checked strong-nail cases plus 14 additional strong non-nail cases.
 
-SQLite:
-
-```text
-.cache/nail_verifier_v3.sqlite3
-```
-
-Cache có safety invalidation để không tái sử dụng local auto-actions từ build calibration cũ.
-
-## Benchmark
+Benchmark multiple files together:
 
 ```bash
-python benchmark_v3.py --file benchmarks/sd_rule_calibration_v33.csv
+python benchmark_v3.py \
+  --file benchmarks/sd_rule_calibration_v33.csv \
+  --file benchmarks/sd_rule_calibration_v34_addendum.csv
 ```
 
-Benchmark sẽ báo riêng từng Rule_ID.
+`UNKNOWN` labels are excluded from precision calculations.
 
-## Chạy trên macOS
+## Run on macOS
 
 ```bash
 cd ~/nail-verifier
@@ -148,30 +132,47 @@ git pull
 bash run_mac.sh
 ```
 
-Mở:
+Open:
 
 ```text
 http://localhost:8501
 ```
 
-Phải thấy:
+You should see:
 
 ```text
-Nail Verifier — Precision v3.3 Shadow Calibration
+Nail Verifier — Precision v3.4 Production Candidate
 ```
 
-## Flow hiện tại
+For the 534-row South Dakota dataset choose:
 
-1. Export CSV NailMap.
-2. Chạy full pilot shadow calibration.
-3. Lấy validation sample cân bằng.
-4. Xác minh gold labels bằng nguồn độc lập.
-5. Chạy benchmark per-rule.
-6. Chỉ bật auto-rule khi empirical precision + statistical confidence + false-remove gate đều đạt.
-7. Sau SD mới làm adapter / calibration cho bang tiếp theo.
+```text
+Chạy toàn bộ CSV — SD production candidate
+```
+
+Bulk mode automatically disables public Nominatim.
+
+## Tests
+
+```bash
+python -m pytest -q
+```
+
+Important regression coverage includes:
+
+- Audra must not false-match Revive;
+- Revive DBA/legal-name variant can match only with address agreement;
+- nail-specific official license is safe KEEP;
+- Nail Supply / Nail Academy conflicts never qualify for Auto KEEP;
+- SD strong nail rule may Auto KEEP;
+- SD strong non-nail rule remains REVIEW;
+- the same SD rule remains blocked outside SD;
+- calibration loader can combine multiple gold CSVs reproducibly.
+
+## Phase 1 exporter
+
+`export_visible_table.js` exports the NailMap virtual table, deduplicates records and checks exported row count against NailMap's expected total before accepting the CSV.
 
 ---
 
-Không có public-data verifier nào đảm bảo 100%.
-
-Mục tiêu của v3.3 là giảm false KEEP và đặc biệt false REMOVE trước khi tăng coverage.
+No public-data verifier can guarantee 100% accuracy. V3.4 deliberately prioritizes precision over coverage and keeps uncertain cases in REVIEW.
