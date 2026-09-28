@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from nailverifier_v3.engine import VerificationEngine, verify_dataframe
+from nailverifier_v3.engine import ENGINE_VERSION, VerificationEngine, verify_dataframe
 from nailverifier_v3.models import BusinessRecord
 
 
@@ -138,3 +138,23 @@ def test_identity_collision_still_blocks_verified_remove(tmp_path):
     assert grocery["Identity_Collision"] == "YES"
     assert grocery["Auto_Action"] == "REVIEW"
     assert grocery["Policy_Status"] == "IDENTITY_COLLISION_REVIEW"
+
+
+def test_v36_bumps_cache_version_and_policy_profile(tmp_path):
+    assert ENGINE_VERSION == "3.6.0"
+
+    engine = make_engine(tmp_path)
+    record = BusinessRecord(
+        company="Bowdle Building & Hardware",
+        street="32575 US-12",
+        city="Bowdle",
+        state="SD",
+        zip_code="57428",
+        phone="6052856303",
+        reviews=8,
+        rating=4.9,
+        status="OPERATIONAL",
+    )
+
+    result = engine.verify_record(record, force_refresh=True)
+    assert result["Policy_Profile"] == "SD_EXACT_KEEP_REMOVE_V1_COLLISION_GUARD"
