@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -13,6 +13,7 @@ from .http import CachedHttpClient
 from .models import BusinessRecord, Evidence
 from .normalize import (
     detect_columns,
+    normalize_phone,
     normalize_street,
     normalize_text,
     normalize_zip,
@@ -24,7 +25,7 @@ from .osm import OSMVerifier
 from .policy import apply_policy
 from .states.sd import SouthDakotaAdapter
 
-ENGINE_VERSION = "3.4.0"
+ENGINE_VERSION = "3.4.1"
 
 OFFICIAL_ADAPTERS = {
     "SD": SouthDakotaAdapter,
@@ -361,7 +362,7 @@ class VerificationEngine:
             **policy,
             **dimensions,
             **local.to_dict(),
-            "Policy_Profile": "SD_KEEP_V1" if record.state.upper() == "SD" else "REVIEW_ONLY",
+            "Policy_Profile": "SD_KEEP_V1_COLLISION_GUARD" if record.state.upper() == "SD" else "REVIEW_ONLY",
             "State_Support": state_support,
             "Checked_At": utc_now(),
             "Cache_Hit": "NO",
@@ -385,6 +386,62 @@ def _address_group_key(record: BusinessRecord) -> str:
     )
 
 
+def _collision_group_key(record: BusinessRecord) -> str:
+    phone = normalize_phone(record.phone)
+    street = normalize_street(record.street, drop_unit=True)
+    if not phone or not street:
+        return ""
+    return "|".join(
+        [
+            phone,
+            street,
+            normalize_text(record.city),
+            record.state.upper(),
+            normalize_zip(record.zip_code),
+        ]
+    )
+
+
+def _identity_collisions(records: List[BusinessRecord]) -> Dict[int, Dict[str, Any]]:
+    buckets: Dict[str, List[int]] = defaultdict(list)
+    for index, record in enumerate(records):
+        key = _collision_group_key(record)
+        if key:
+            buckets[key].append(index)
+
+    collisions: Dict[int, Dict[str, Any]] = {}
+    for indexes in buckets.values():
+        if len(indexes) < 2:
+            continue
+
+        normalized_names = {
+            normalize_text(records[index].company)
+            for index in indexes
+            if normalize_text(records[index].company)
+        }
+        if len(normalized_names) < 2:
+            continue
+
+        names = sorted({records[index].company for index in indexes})
+        display_names = " | ".join(names)
+        for index in indexes:
+            collisions[index] = {
+                "Identity_Collision": "YES",
+                "Collision_Group_Size": len(indexes),
+                "Collision_Names": display_names,
+            }
+    return collisions
+
+
+def _normalized_identity(record: BusinessRecord) -> Dict[str, str]:
+    return {
+        "Normalized_Street": normalize_street(record.street, drop_unit=False),
+        "Normalized_City": normalize_text(record.city),
+        "Normalized_ZIP": normalize_zip(record.zip_code),
+        "Normalized_Phone": normalize_phone(record.phone),
+    }
+
+
 def verify_dataframe(
     df: pd.DataFrame,
     limit: Optional[int] = None,
@@ -402,6 +459,7 @@ def verify_dataframe(
     records = [row_to_record(row, mapping) for _, row in work.iterrows()]
     identity_counts = Counter(record_identity(record) for record in records)
     address_counts = Counter(_address_group_key(record) for record in records)
+    collisions = _identity_collisions(records)
 
     rows: List[Dict[str, Any]] = []
     total = len(work)
@@ -429,8 +487,27 @@ def verify_dataframe(
                 "Source_Errors": str(exc),
             }
 
+        result.update(_normalized_identity(record))
         result["Exact_Record_Duplicate_Count"] = identity_counts[record_identity(record)]
         result["Shared_Address_Count"] = address_counts[_address_group_key(record)]
+
+        collision = collisions.get(pos - 1)
+        if collision:
+            result.update(collision)
+            if result.get("Auto_Action") in {"KEEP", "REMOVE"}:
+                result["Auto_Action"] = "REVIEW"
+                result["Policy_Status"] = "IDENTITY_COLLISION_REVIEW"
+                prior_reason = str(result.get("Reason", "")).strip()
+                collision_reason = (
+                    "Same normalized phone and base address appear under multiple business names; "
+                    "automatic action is blocked pending identity review."
+                )
+                result["Reason"] = (prior_reason + " " + collision_reason).strip()
+        else:
+            result["Identity_Collision"] = "NO"
+            result["Collision_Group_Size"] = 1
+            result["Collision_Names"] = ""
+
         rows.append(result)
 
         if progress:
