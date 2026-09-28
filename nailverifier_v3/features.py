@@ -44,6 +44,13 @@ WEAK_NAIL_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A business may contain the word "nail" without providing salon services.
+# Keep these cases in REVIEW rather than turning them into auto KEEP candidates.
+NON_SERVICE_NAIL_RE = re.compile(
+    r"\b(supply|supplies|wholesale|wholesaler|distributor|distribution|academy|school|college|training|institute|product|products|equipment|warehouse|insurance|consulting|consultant|association|expo)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class LocalAssessment:
@@ -94,6 +101,7 @@ def assess_local(record: BusinessRecord) -> LocalAssessment:
     location = _has_location(record)
     identity = _has_identity(record)
     explicit_nail = _explicit_nail_name(record.company)
+    nail_non_service = bool(NON_SERVICE_NAIL_RE.search(record.company or "")) if explicit_nail else False
     weak_nail_hint = bool(WEAK_NAIL_HINT_RE.search(record.company or ""))
     beauty = has_beauty_words(record.company)
     strong_non_nail = _strong_non_nail_name(record.company)
@@ -127,6 +135,15 @@ def assess_local(record: BusinessRecord) -> LocalAssessment:
             candidate_action="REVIEW",
             signal="SOURCE_STATUS_TEMP_CLOSED",
             score=85,
+            risk_flags=risks,
+        )
+
+    if nail_non_service:
+        return LocalAssessment(
+            rule_id="R_NAIL_NON_SERVICE_CONFLICT",
+            candidate_action="REVIEW",
+            signal="NAIL_WORD_WITH_NON_SERVICE_BUSINESS_TERM",
+            score=40,
             risk_flags=risks,
         )
 
