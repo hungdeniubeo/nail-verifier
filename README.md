@@ -2,44 +2,80 @@
 
 Precision-first verifier for NailMap CSV data.
 
-## Current version: Precision v3.4.1 Production Candidate
+## Current version: Precision v3.5 Production Candidate
 
-V3.4.1 is intentionally conservative:
+V3.5 stays conservative:
 
-- South Dakota `R_NAIL_EXPLICIT_STRONG` may Auto KEEP.
-- Identity-collision guard can override an otherwise valid Auto KEEP/REMOVE back to REVIEW.
+- South Dakota `R_NAIL_EXPLICIT_STRONG` may Auto KEEP after calibration.
+- Seven independently verified South Dakota `R_NAIL_EXPLICIT_ADDRESS_STRONG` identities may Auto KEEP only through an **exact identity allowlist**.
+- The generic address-strong rule is still REVIEW-only.
+- Identity-collision guard can override any otherwise valid Auto KEEP/REMOVE back to REVIEW.
 - South Dakota local REMOVE rules are still REVIEW-only.
 - Other states do not inherit South Dakota auto-policy.
 - Public Nominatim is disabled for bulk runs.
 - Official state evidence remains higher priority than local heuristics.
 
-## Why only KEEP is enabled
+## Calibrated strong KEEP rule
 
-The strong SD nail-name rule was frozen before the latest validation addendum.
-Across the base calibration plus the addendum:
+Across the base calibration plus the v3.4 addendum:
 
-- 74 labeled strong-rule cases were independently checked.
-- 74/74 matched real nail-service businesses.
-- empirical precision on that checked sample = 100%.
+- 74 labeled `R_NAIL_EXPLICIT_STRONG` cases were independently checked;
+- 74/74 matched real nail-service businesses;
+- empirical precision on that checked sample = 100%;
 - Wilson 95% lower bound is about 95.06%.
-- the latest 50-case addendum contains 50/50 nail matches.
 
-This is evidence for a production candidate, not a guarantee of 100% real-world accuracy.
+This supports a production candidate. It is not a guarantee of 100% real-world accuracy.
 
-The strong SD non-nail rule is still blocked:
+## V3.5 exact verified identity allowlist
 
-- all 35 candidates in the current 534-row SD dataset were independently checked as non-nail;
-- but 35 perfect observations only give a Wilson 95% lower bound of about 90.11%;
-- therefore V3.4.1 does **not** auto-remove those rows.
+The complete South Dakota `R_NAIL_EXPLICIT_ADDRESS_STRONG` cohort in the current 534-row dataset contains eight businesses. Independent public-source calibration produced:
+
+- 7 `NAIL`;
+- 1 `UNKNOWN` (`K & E Nail Studio LLC`).
+
+Seven observations are far too few to enable the generic rule statistically, so V3.5 does **not** add `R_NAIL_EXPLICIT_ADDRESS_STRONG` to `VALIDATED_RULES`.
+
+Instead, only these seven already-verified identities can Auto KEEP:
+
+- Anna's Nails — 712 University Ave Ste A, Hot Springs, SD 57747
+- Nails By Alayna Reyes — 901 N Main St Ste 4, Mitchell, SD 57301
+- Olive & Opal Nail Studio — 501 Main St Studio 4, Rapid City, SD 57701
+- Simplee Nails — 317 Main St Ste 1, Rapid City, SD 57701
+- The Nail Room — 822 Main St Ste 5, Rapid City, SD 57701
+- The Nail Haus By Adamari — 5201 S Solberg Ave Suite 205, Sioux Falls, SD 57108
+- Zen Nail Studio — 5201 S Solberg Ave Suite 200, Sioux Falls, SD 57108
+
+The match is exact after normalization of:
+
+```text
+company name + full street/suite + city + ZIP + state scope
+```
+
+A business with the same name but a different address does not qualify. A new business that merely resembles one of these patterns does not qualify. `K & E Nail Studio LLC` remains REVIEW.
+
+Allowlisted rows use:
+
+```text
+Auto_Action = KEEP
+Policy_Status = VERIFIED_IDENTITY_ALLOWLIST
+```
+
+Calibration evidence is stored in:
+
+```text
+benchmarks/sd_address_strong_v35.csv
+```
+
+## Auto REMOVE remains disabled
+
+The strong SD non-nail cohort is empirically clean in the current dataset, but the statistical lower bound is still below the production gate. Therefore V3.5 continues to keep local REMOVE candidates in REVIEW.
 
 ## Identity-collision guard
-
-V3.4.1 adds a dataset-level safety guard.
 
 A row is marked `Identity_Collision = YES` when:
 
 - normalized phone is the same;
-- normalized base street address is the same (suite/unit is ignored for collision grouping);
+- normalized base street address is the same (suite/unit ignored for collision grouping);
 - city/state/ZIP agree;
 - more than one distinct normalized company name appears in that group.
 
@@ -50,26 +86,7 @@ Auto_Action = REVIEW
 Policy_Status = IDENTITY_COLLISION_REVIEW
 ```
 
-The original `Candidate_Action` and rule are retained for audit.
-
-Important behavior:
-
-- same phone + different address is **not** a collision;
-- exact duplicate rows with the same normalized business name are **not** identity collisions;
-- collisions on rows that were already REVIEW stay REVIEW but are still flagged for audit.
-
-On the previous 534-row SD v3.4 output, the v3.4.1 collision rule identifies 15 collision rows in total. Four of those rows were Auto KEEP candidates, so applying the new guard would reduce local Auto KEEP from 121 to 117 while keeping local Auto REMOVE at 0.
-
-## Normalized identity output
-
-V3.4.1 exports additional downstream-safe fields:
-
-- `Normalized_Street`
-- `Normalized_City`
-- `Normalized_ZIP`
-- `Normalized_Phone`
-
-This also makes shifted-address recovery visible in output. For example, when a source row accidentally puts a street value in the City column, the raw CSV is preserved while normalized fields reflect the recovered record used by the verifier.
+The original candidate action and rule remain visible for audit. This guard runs after the allowlist and calibrated-rule policy, so an exact allowlisted identity can still be blocked if the dataset itself shows an identity collision.
 
 ## Other safety guards
 
@@ -113,65 +130,30 @@ They are routed to `R_NAIL_NON_SERVICE_CONFLICT` and remain REVIEW.
 
 ### Auto KEEP
 
-`R_NAIL_EXPLICIT_STRONG`
-
-Requires:
-
-- explicit nail-service name;
-- `OPERATIONAL`;
-- location/ZIP;
-- phone;
-- at least 3 reviews;
-- no non-service nail conflict term;
-- no dataset-level identity collision.
+1. `R_NAIL_EXPLICIT_STRONG` when the calibrated state rule applies and no collision guard blocks it.
+2. Exact independently verified v3.5 identities from the address-strong allowlist, with exact normalized identity match and no collision guard block.
+3. Nail-specific current official-state evidence, when available.
 
 ### Still REVIEW
 
-- `R_NAIL_EXPLICIT_ADDRESS_STRONG`
-- `R_NAIL_EXPLICIT_WEAK`
-- `R_NAIL_STYLING_HINT`
-- `R_BEAUTY_AMBIGUOUS`
-- `R_UNKNOWN`
-- `R_NON_NAIL_CATEGORY_STRONG`
-- `R_NON_NAIL_CATEGORY_ADDRESS_STRONG`
-- permanently/temporarily closed local-source rules unless independently handled by stronger evidence
-- any identity-collision row that would otherwise auto-act
-
-## Official South Dakota adapter
-
-The SD adapter:
-
-1. downloads the current business-license roster once;
-2. indexes it locally by ZIP/city;
-3. shortlists plausible business-name candidates;
-4. validates detail pages with distinctive-name + address guards.
-
-Regression case:
-
-```text
-Audra Day Spa & Salon
-!=
-Revive Day Spa - Apprentice Salon
-```
-
-while a legal/DBA variant such as Revive can match when distinctive name and address agree.
+- generic `R_NAIL_EXPLICIT_ADDRESS_STRONG` rows not in the exact allowlist;
+- `K & E Nail Studio LLC` until independently verified;
+- `R_NAIL_EXPLICIT_WEAK`;
+- `R_NAIL_STYLING_HINT`;
+- `R_BEAUTY_AMBIGUOUS`;
+- `R_UNKNOWN`;
+- `R_NON_NAIL_CATEGORY_STRONG`;
+- `R_NON_NAIL_CATEGORY_ADDRESS_STRONG`;
+- permanently/temporarily closed local-source rules unless independently handled by stronger evidence;
+- any identity-collision row that would otherwise auto-act.
 
 ## Calibration files
 
 - `benchmarks/sd_rule_calibration_v33.csv`
 - `benchmarks/sd_rule_calibration_v34_addendum.csv`
+- `benchmarks/sd_address_strong_v35.csv`
 
-The addendum contains 50 independently checked strong-nail cases plus 14 additional strong non-nail cases.
-
-Benchmark multiple files together:
-
-```bash
-python benchmark_v3.py \
-  --file benchmarks/sd_rule_calibration_v33.csv \
-  --file benchmarks/sd_rule_calibration_v34_addendum.csv
-```
-
-`UNKNOWN` labels are excluded from precision calculations.
+`UNKNOWN` labels are excluded from precision calculations and never treated as positive evidence.
 
 ## Run on macOS
 
@@ -190,7 +172,7 @@ http://localhost:8501
 You should see:
 
 ```text
-Nail Verifier — Precision v3.4.1 Production Candidate
+Nail Verifier — Precision v3.5 Production Candidate
 ```
 
 For the 534-row South Dakota dataset choose:
@@ -204,7 +186,7 @@ Bulk mode automatically disables public Nominatim.
 Download result:
 
 ```text
-*-precision-v341.csv
+*-precision-v35.csv
 ```
 
 ## Tests
@@ -213,20 +195,22 @@ Download result:
 python -m pytest -q
 ```
 
-Important regression coverage includes:
+Regression coverage includes:
 
 - Audra must not false-match Revive;
-- Revive DBA/legal-name variant can match only with address agreement;
+- Revive DBA/legal-name variant requires address agreement;
 - nail-specific official license is safe KEEP;
 - Nail Supply / Nail Academy conflicts never qualify for Auto KEEP;
 - SD strong nail rule may Auto KEEP;
 - SD strong non-nail rule remains REVIEW;
-- the same SD rule remains blocked outside SD;
+- state-scoped rules do not leak to other states;
 - same phone + same base address + different names blocks auto-action;
-- same phone at different addresses does not collide;
 - exact duplicate name is not treated as identity collision;
 - normalized identity fields are exported;
-- calibration loader can combine multiple gold CSVs reproducibly.
+- exact verified address-strong identity may Auto KEEP;
+- the same verified name at a wrong address stays REVIEW;
+- `K & E Nail Studio LLC` remains REVIEW;
+- exact allowlist does not leak outside South Dakota.
 
 ## Phase 1 exporter
 
@@ -234,4 +218,4 @@ Important regression coverage includes:
 
 ---
 
-No public-data verifier can guarantee 100% accuracy. V3.4.1 deliberately prioritizes precision over coverage and keeps uncertain cases in REVIEW.
+No public-data verifier can guarantee 100% accuracy. V3.5 deliberately prioritizes precision over coverage and keeps uncertain cases in REVIEW.
