@@ -7,79 +7,100 @@ Tool có 2 phase:
 
 ## Phase 1
 
-Dùng export_visible_table.js trên NailMap.
+Dùng `export_visible_table.js` trên NailMap.
 
-Exporter sẽ cuộn hết virtual table, chống duplicate, đọc total rows và chỉ export khi số dòng thu được khớp total.
+Exporter cuộn virtual table, chống duplicate, đọc total rows và chỉ export khi số dòng thu được khớp total.
 
 ---
 
-# Phase 2 — Precision v3.2
+# Phase 2 — Precision v3.3 Shadow Calibration
 
-V3.2 được thiết kế cho dataset lớn theo nguyên tắc:
+Nguyên tắc:
 
-precision > coverage
+> precision > coverage
 
 Nếu chưa đủ chắc chắn thì REVIEW, không đoán.
 
-## Tư duy mới ở v3.2
+## Decision / Candidate / Auto
 
-V3.2 tách 3 thứ khác nhau:
+V3.3 tách riêng:
 
-- Decision: tool nghĩ record thuộc nhóm nào.
-- Candidate_Action: rule đề xuất KEEP / REMOVE / REVIEW.
-- Auto_Action: hành động thực sự được phép chạy tự động.
+- `Decision`: tool đánh giá record thuộc nhóm nào.
+- `Candidate_Action`: rule đề xuất KEEP / REMOVE / REVIEW.
+- `Auto_Action`: hành động thật sự được phép chạy tự động.
 
-Một candidate KEEP/REMOVE không tự động trở thành Auto_Action.
+Local rule hiện vẫn **shadow-only**. Candidate KEEP/REMOVE không tự động trở thành Auto_Action.
 
-Local rule chỉ được auto khi đã có đủ gold sample và vượt benchmark gate.
+Official nail-specific current state license vẫn có thể Auto KEEP vì evidence tier mạnh hơn heuristic local.
+
+## Vì sao chưa bật auto local rules
+
+Một sample nhỏ có thể cho kết quả 20/20 hoặc 30/30 nhưng vẫn chưa đủ để khẳng định rule sẽ giữ precision rất cao ở hàng chục nghìn record.
+
+Benchmark v3.3 vì vậy đo thêm **Wilson 95% lower confidence bound**.
+
+Báo cáo cho mỗi rule gồm:
+
+- số gold labels;
+- empirical precision;
+- Wilson 95% lower bound;
+- false-remove count;
+- trạng thái cần thêm validation hay đủ điều kiện.
+
+`UNKNOWN` gold label không bị tính như đúng hoặc sai.
+
+## Calibration South Dakota
+
+Repo có:
+
+- `benchmarks/sd_gold.csv`
+- `benchmarks/sd_rule_calibration_v33.csv`
+
+`sd_rule_calibration_v33.csv` chứa các business đã được đối chiếu bằng website chính thức / business directory / map listing / nguồn độc lập khác.
+
+Hiện local rules **chưa được auto-enable**.
 
 ## Local rule engine
 
-Các rule hiện có:
+Các rule quan trọng:
 
-- R_NAIL_EXPLICIT_STRONG
-  - tên có nail/nails/manicure/pedicure hoặc compact name như NailSpa, NativeNails, Nailery;
+- `R_NAIL_EXPLICIT_STRONG`
+  - explicit nail name;
   - OPERATIONAL;
-  - có location + phone;
+  - location + phone;
   - >= 3 reviews;
   - Candidate KEEP.
 
-- R_NAIL_EXPLICIT_ADDRESS_STRONG
+- `R_NAIL_EXPLICIT_ADDRESS_STRONG`
   - explicit nail name;
-  - location đầy đủ;
+  - location;
   - >= 5 reviews;
-  - có thể thiếu phone;
-  - Candidate KEEP nhưng rule riêng để benchmark độc lập.
+  - Candidate KEEP nhưng benchmark riêng.
 
-- R_NAIL_EXPLICIT_WEAK
-  - explicit nail name nhưng thiếu identity/reviews;
+- `R_NAIL_NON_SERVICE_CONFLICT`
+  - tên có nail nhưng đồng thời có các từ như Supply / Wholesale / Academy / School / Products / Equipment...;
+  - REVIEW để tránh nhầm nail-product/training business với nail salon.
+
+- `R_NAIL_EXPLICIT_WEAK`
+  - explicit nail name nhưng identity/review yếu;
   - REVIEW.
 
-- R_NAIL_STYLING_HINT
-  - từ gợi ý như polished / polish / pinky / tips / toes / claws / lacquer / gloss;
-  - REVIEW vì các từ này không đủ chắc.
+- `R_NAIL_STYLING_HINT`
+  - polish / polished / pinky / tips / toes / claws / lacquer / gloss;
+  - REVIEW.
 
-- R_NON_NAIL_CATEGORY_STRONG
-  - category rõ ràng như hardware / restaurant / grocery / fuel / hotel...;
-  - có structured identity;
+- `R_NON_NAIL_CATEGORY_STRONG`
+  - hardware / restaurant / grocery / fuel / hotel...;
+  - structured identity;
   - Candidate REMOVE.
 
-- R_NON_NAIL_CATEGORY_ADDRESS_STRONG
-  - strong non-nail category + location + review activity;
-  - Candidate REMOVE nhưng benchmark riêng.
-
-- R_BEAUTY_AMBIGUOUS
-  - hair / salon / spa / beauty / lash...
+- `R_BEAUTY_AMBIGUOUS`
+  - hair / salon / spa / beauty / lash...;
   - REVIEW vì beauty business không đồng nghĩa nail salon.
 
-- R_UNKNOWN
-  - không có rule precision cao.
+## Official South Dakota adapter
 
-## Official source
-
-South Dakota adapter:
-
-- tải official business roster một lần;
+- tải roster một lần;
 - index local theo ZIP / City;
 - shortlist candidate;
 - chỉ mở detail cho candidate hợp lý;
@@ -87,167 +108,70 @@ South Dakota adapter:
 
 Regression quan trọng:
 
+```text
 Audra Day Spa & Salon
 !=
 Revive Day Spa - Apprentice Salon
+```
 
-Trong khi:
-
-Revive Salon & Day Spa
-~=
-Revive Day Spa - Apprentice Salon
-
-chỉ khi distinctive token REVIVE và address/city/ZIP khớp.
+Trong khi Revive DBA/legal-name variant chỉ được match khi distinctive token và location cùng khớp.
 
 ## Public OpenStreetMap
 
 - Test 20 / Test 50 có thể bật Nominatim.
-- Bulk pilot tự tắt Nominatim.
+- Full/bulk pilot tự tắt Nominatim.
 - Không dùng public Nominatim như bulk backend.
 
-## Audit columns
-
-V3.2 xuất thêm:
-
-- Rule_ID
-- Candidate_Action
-- Auto_Action
-- Policy_Status
-- Local_Signal
-- Local_Score
-- Risk_Flags
-- Business_Exists
-- Nail_Service
-- Shared_Address_Count
-- Exact_Record_Duplicate_Count
-- official evidence
-- OSM evidence
-- Reason
-- Source_Errors
-
-## Policy gate
-
-Local candidate rules mặc định chưa được auto-enable.
-
-Rule KEEP cần:
-
-- >= 20 manually verified examples của chính rule đó
-- precision >= 99%
-
-Rule REMOVE cần:
-
-- >= 20 manually verified examples
-- precision >= 99.5%
-- zero false-remove trong benchmark
-
-Official nail-specific current license vẫn có thể Auto KEEP vì evidence tier mạnh hơn local heuristic.
-
-## Validation sample
-
-Sau khi chạy v3.2, UI có nút:
-
-Tải validation sample cân bằng
-
-Sample lấy theo Rule_ID để tránh chỉ kiểm tra các case dễ.
-
-Các cột cần điền:
-
-- Gold_Label = NAIL / NOT_NAIL / UNKNOWN
-- Gold_Source_URL
-- Gold_Notes
-
-Sau đó dùng sample để calibrate policy.
-
-## Benchmark
-
-Chạy:
-
-python benchmark_v3.py
-
-Benchmark v3.2 báo riêng:
-
-- candidate rule sample count
-- precision theo từng Rule_ID
-- false remove
-- rule nào ELIGIBLE
-- actual Auto_Action đang được enable
-
-Candidate_Action và Auto_Action không còn bị trộn với nhau.
-
----
-
-# Chạy trên macOS
-
-cd ~/nail-verifier
-git pull
-bash run_mac.sh
-
-Mở:
-
-http://localhost:8501
-
-Phải thấy:
-
-Nail Verifier — Precision v3.2
-
-## Flow khuyến nghị
-
-1. Test 20 dòng.
-2. Nếu không có Source_Errors -> chạy Pilot toàn bộ CSV — official batch only.
-3. Tải precision-v32.csv.
-4. Tải validation-sample-v32.csv.
-5. Kiểm tra gold sample.
-6. Chạy benchmark.
-7. Chỉ enable rule nào vượt precision gate.
-8. Sau đó mới mở rộng production / bang tiếp theo.
-
----
-
-# Cache / resume
+## Cache
 
 SQLite:
 
+```text
 .cache/nail_verifier_v3.sqlite3
+```
 
-Engine version nằm trong cache key nên v3.1 và v3.2 không dùng nhầm verification result của nhau.
+Cache có safety invalidation để không tái sử dụng local auto-actions từ build calibration cũ.
 
-HTTP cache vẫn được tận dụng để không tải lại official source không cần thiết.
+## Benchmark
 
----
+```bash
+python benchmark_v3.py --file benchmarks/sd_rule_calibration_v33.csv
+```
 
-# Official adapters
+Benchmark sẽ báo riêng từng Rule_ID.
 
-Hiện có:
+## Chạy trên macOS
 
-- SD — South Dakota Cosmetology Commission business roster + detail.
+```bash
+cd ~/nail-verifier
+git pull
+bash run_mac.sh
+```
 
-Các bang khác phải có adapter riêng vì board/schema/rule khác nhau.
+Mở:
 
-Local rule engine dùng chung toàn quốc nhưng Auto_Action vẫn được benchmark theo state/dataset trước khi enable.
+```text
+http://localhost:8501
+```
 
----
+Phải thấy:
 
-# Tests
+```text
+Nail Verifier — Precision v3.3 Shadow Calibration
+```
 
-Chạy:
+## Flow hiện tại
 
-python -m pytest -q
-
-Regression tests bao gồm:
-
-- Audra không match nhầm Revive.
-- Revive DBA variant match được khi address đúng.
-- official Nail Salon -> safe Auto KEEP.
-- broad beauty license không tự thành VERIFIED_NAIL.
-- structured explicit nail -> Candidate KEEP nhưng policy block.
-- structured non-nail -> Candidate REMOVE nhưng policy block.
-- low-evidence nail-name -> REVIEW.
-- permanently closed từ NailMap không còn auto-remove nếu chưa benchmark.
-- shifted address recovery.
-- roster tải/index một lần.
+1. Export CSV NailMap.
+2. Chạy full pilot shadow calibration.
+3. Lấy validation sample cân bằng.
+4. Xác minh gold labels bằng nguồn độc lập.
+5. Chạy benchmark per-rule.
+6. Chỉ bật auto-rule khi empirical precision + statistical confidence + false-remove gate đều đạt.
+7. Sau SD mới làm adapter / calibration cho bang tiếp theo.
 
 ---
 
 Không có public-data verifier nào đảm bảo 100%.
 
-Mục tiêu của v3.2 là giảm false KEEP / false REMOVE tối đa, đồng thời dùng benchmark để mở coverage dần thay vì bật rule rộng ngay từ đầu.
+Mục tiêu của v3.3 là giảm false KEEP và đặc biệt false REMOVE trước khi tăng coverage.
