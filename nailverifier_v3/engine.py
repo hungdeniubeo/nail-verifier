@@ -25,7 +25,7 @@ from .osm import OSMVerifier
 from .policy import apply_policy, apply_verified_identity_policy
 from .states.sd import SouthDakotaAdapter
 
-ENGINE_VERSION = "3.5.0"
+ENGINE_VERSION = "3.6.0"
 
 OFFICIAL_ADAPTERS = {
     "SD": SouthDakotaAdapter,
@@ -371,7 +371,7 @@ class VerificationEngine:
             **policy,
             **dimensions,
             **local.to_dict(),
-            "Policy_Profile": "SD_KEEP_V2_EXACT_ALLOWLIST_COLLISION_GUARD" if record.state.upper() == "SD" else "REVIEW_ONLY",
+            "Policy_Profile": "SD_EXACT_KEEP_REMOVE_V1_COLLISION_GUARD" if record.state.upper() == "SD" else "REVIEW_ONLY",
             "State_Support": state_support,
             "Checked_At": utc_now(),
             "Cache_Hit": "NO",
