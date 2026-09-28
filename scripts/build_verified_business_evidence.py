@@ -58,6 +58,8 @@ OFFICIAL_CHAIN_HOSTS = {
     "coffeecupfuelstops.com",
 }
 
+LOCATION_PATH_HOSTS = {"coffeecupfuelstops.com"}
+
 
 def _host(url: str) -> str:
     host = (urlparse(str(url or "").strip()).hostname or "").lower()
@@ -66,6 +68,20 @@ def _host(url: str) -> str:
 
 def _host_matches(host: str, candidates: set[str]) -> bool:
     return any(host == candidate or host.endswith("." + candidate) for candidate in candidates)
+
+
+def _norm_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+
+
+def _source_location_conflicts(url: str, city: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = _host(url)
+    if host not in LOCATION_PATH_HOSTS:
+        return False
+    slug = _norm_slug(parsed.path.strip("/").split("/")[-1] if parsed.path.strip("/") else "")
+    city_slug = _norm_slug(city)
+    return bool(slug and city_slug and slug != city_slug)
 
 
 def source_tier_for(url: str, notes: str) -> str:
@@ -180,6 +196,9 @@ def build_registry(input_paths: Iterable[str]) -> Tuple[pd.DataFrame, pd.DataFra
                 continue
             if not url:
                 rejected_rows.append(_reject(row, "MISSING_BUSINESS_SOURCE"))
+                continue
+            if _source_location_conflicts(url, str(row.get("City", ""))):
+                rejected_rows.append(_reject(row, "SOURCE_LOCATION_CONFLICT"))
                 continue
 
             if expected == "NAIL":
